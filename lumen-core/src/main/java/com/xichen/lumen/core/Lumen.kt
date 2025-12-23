@@ -20,7 +20,7 @@ import kotlinx.coroutines.withContext
  * 核心职责：
  * - 调度加载流程（Fetcher → Decryptor → Decoder → Transformer → Cache）
  * - 管理协程生命周期
- * - 缓存协调（内存缓存）
+ * - 缓存协调（内存缓存 + 磁盘缓存）
  * 
  * 使用示例：
  * ```
@@ -36,7 +36,8 @@ import kotlinx.coroutines.withContext
  */
 class Lumen private constructor(
     private val context: Context,
-    private val memoryCache: MemoryCache
+    private val memoryCache: MemoryCache,
+    private val diskCache: DiskCache
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -57,38 +58,51 @@ class Lumen private constructor(
         emit(ImageState.Loading)
 
         try {
-            // 3. 获取数据
-            val fetcher = FetcherFactory.create(context, request.data)
-            var data = withContext(Dispatchers.IO) {
-                fetcher.fetch()
+            // 3. 检查磁盘缓存（使用数据源 key，不包含解密器和转换器）
+            // 磁盘缓存存储原始数据（可能是加密的），保证"不落明文磁盘"原则
+            val dataSourceCacheKey = request.data.key
+            var rawData: ByteArray = diskCache.get(dataSourceCacheKey) ?: run {
+                // 4. 如果磁盘缓存未命中，从数据源获取原始数据
+                val fetcher = FetcherFactory.create(context, request.data)
+                val fetchedData = withContext(Dispatchers.IO) {
+                    fetcher.fetch()
+                }
+
+                // 5. 存入磁盘缓存（存储原始数据，可能是加密的）
+                // 不存储解密后的数据，保证安全性和扩展性
+                diskCache.put(dataSourceCacheKey, fetchedData)
+                
+                fetchedData
             }
 
-            // 4. 解密（如果需要）
+            // 6. 解密（如果需要）- 在从磁盘缓存读取后解密
+            // 这样既保证了"不落明文磁盘"，又支持用户自定义任何解密算法
+            var data = rawData
             request.decryptor?.let { decryptor ->
                 data = withContext(Dispatchers.Default) {
-                    decryptor.decrypt(data)
+                    decryptor.decrypt(rawData)
                 }
             }
 
-            // 5. 解码
+            // 7. 解码
             var bitmap = withContext(Dispatchers.Default) {
                 Decoder.decode(data)
             }
 
-            // 6. 转换（如果需要）
+            // 8. 转换（如果需要）
             request.transformers.forEach { transformer ->
                 bitmap = withContext(Dispatchers.Default) {
                     transformer.transform(bitmap)
                 }
             }
 
-            // 7. 存入缓存
+            // 9. 存入内存缓存（存储转换后的 Bitmap）
             memoryCache.put(request.cacheKey, bitmap)
 
-            // 8. 发送成功状态
+            // 10. 发送成功状态
             emit(ImageState.Success(bitmap))
         } catch (e: Exception) {
-            // 9. 发送错误状态
+            // 11. 发送错误状态
             emit(ImageState.Error(e))
         }
     }.flowOn(Dispatchers.IO)
@@ -103,8 +117,23 @@ class Lumen private constructor(
     /**
      * 清空内存缓存
      */
-    fun clearCache() {
+    fun clearMemoryCache() {
         memoryCache.clear()
+    }
+
+    /**
+     * 清空磁盘缓存
+     */
+    suspend fun clearDiskCache() {
+        diskCache.clear()
+    }
+
+    /**
+     * 清空所有缓存（内存 + 磁盘）
+     */
+    suspend fun clearCache() {
+        memoryCache.clear()
+        diskCache.clear()
     }
 
     companion object {
@@ -118,7 +147,8 @@ class Lumen private constructor(
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Lumen(
                     context.applicationContext,
-                    MemoryCache()
+                    MemoryCache(),
+                    DiskCache(context.applicationContext)
                 ).also { INSTANCE = it }
             }
         }
@@ -126,8 +156,12 @@ class Lumen private constructor(
         /**
          * 创建新实例（用于测试或特殊场景）
          */
-        fun create(context: Context, memoryCache: MemoryCache = MemoryCache()): Lumen {
-            return Lumen(context.applicationContext, memoryCache)
+        fun create(
+            context: Context,
+            memoryCache: MemoryCache = MemoryCache(),
+            diskCache: DiskCache = DiskCache(context.applicationContext)
+        ): Lumen {
+            return Lumen(context.applicationContext, memoryCache, diskCache)
         }
 
         /**

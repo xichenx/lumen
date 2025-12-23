@@ -25,8 +25,8 @@ data class ImageRequest(
     val priority: Priority = Priority.NORMAL
 ) {
     /**
-     * 生成缓存 Key
-     * 包含 data、decryptor 和 transformers 的信息
+     * 生成缓存 Key（包含转换器）
+     * 用于内存缓存，包含 data、decryptor 和 transformers 的信息
      */
     val cacheKey: String
         get() = buildString {
@@ -36,6 +36,18 @@ data class ImageRequest(
                 append("_transform$index:").append(transformer.key)
             }
         }
+
+    /**
+     * 生成原始数据缓存 Key（仅包含数据源信息）
+     * 用于磁盘缓存，只包含 data 的信息，不包含 decryptor
+     * 
+     * 设计原则：
+     * - 磁盘缓存存储原始数据（可能是加密的），保证"不落明文磁盘"
+     * - 解密在从磁盘缓存读取后进行，支持用户自定义任何解密算法
+     * - 同一个数据源使用不同的解密器时，共享同一个磁盘缓存条目
+     */
+    val rawDataCacheKey: String
+        get() = data.key
 
     /**
      * 加载优先级
