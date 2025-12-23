@@ -67,11 +67,12 @@ While there are excellent image loading libraries like Glide and Coil in the And
   - Support for chained transformations
   - Smart View-level clipping for certain scaleTypes (centerCrop, fitXY)
   
-- ✅ **Multiple Data Sources**: Supports URL, File, Uri, Resource ID
+- ✅ **Multiple Data Sources**: Supports URL, File, Uri, Resource ID, Video
   - Network URL loading with HttpURLConnection
   - Local file system access
   - Android ContentProvider Uri support
   - Android resource ID support
+  - Video file frame extraction (File and Uri)
   
 - ✅ **Compose Support**: Native Jetpack Compose components and state management
   - `LumenImage` composable for easy integration
@@ -82,6 +83,24 @@ While there are excellent image loading libraries like Glide and Coil in the And
   - Default cache size: 1/8 of available memory
   - Automatic cache key generation (includes data, decryptor, transformers)
   - Thread-safe cache operations
+  
+- ✅ **Disk Cache**: Automatic disk cache for raw image data
+  - Default cache size: 50MB
+  - LRU-based cache eviction
+  - Stores encrypted data (supports "no plaintext on disk" principle)
+  - Automatic cache key generation based on data source
+  
+- ✅ **GIF Animation Support**: Automatic GIF detection and playback
+  - Full animation support on API 28+ (using ImageDecoder)
+  - Automatic fallback to static image (first frame) on API < 28
+  - Auto-start animation playback
+  - Seamless integration with existing API
+  
+- ✅ **Video Frame Extraction**: Extract frames from video files
+  - Support for File and Uri sources
+  - Extract frame at any time point (in microseconds)
+  - All transformers supported (rounded corners, blur, etc.)
+  - Automatic memory caching for extracted frames
 
 ### Technical Highlights
 
@@ -93,7 +112,8 @@ While there are excellent image loading libraries like Glide and Coil in the And
   
 - 🎭 **State Management**: Sealed Class for loading states
   - `ImageState.Loading`: Loading in progress
-  - `ImageState.Success(bitmap)`: Loaded successfully
+  - `ImageState.Success(bitmap)`: Loaded successfully (static images)
+  - `ImageState.SuccessAnimated(drawable)`: Loaded successfully (GIF animations)
   - `ImageState.Error(throwable)`: Load failed
   - `ImageState.Fallback`: Fallback state for custom handling
   
@@ -169,8 +189,9 @@ Lumen.with(context)
 | **Compose Support** | ✅ Native Compose components | ⚠️ Requires adaptation | ✅ Native support | ❌ No official support | ❌ No official support |
 | **Encrypted Image Support** | ✅ Built-in Decryptor interface | ❌ Requires custom implementation | ❌ Requires custom implementation | ❌ Requires custom implementation | ❌ Requires custom implementation |
 | **Memory Management** | ✅ LruCache, automatic memory management | ✅ Advanced memory management | ✅ Automatic memory management | ✅ Ashmem (Android <5.0), advanced | ⚠️ Basic memory management |
-| **Disk Cache** | ⚠️ Manual implementation | ✅ Automatic disk cache | ✅ Automatic disk cache | ✅ Automatic disk cache | ✅ Automatic disk cache |
-| **GIF Support** | ❌ Not supported | ✅ Full support | ✅ Full support | ✅ Full support | ❌ Not supported |
+| **Disk Cache** | ✅ Automatic disk cache (50MB default) | ✅ Automatic disk cache | ✅ Automatic disk cache | ✅ Automatic disk cache | ✅ Automatic disk cache |
+| **GIF Support** | ✅ Full support (API 28+), fallback on <28 | ✅ Full support | ✅ Full support | ✅ Full support | ❌ Not supported |
+| **Video Frame** | ✅ Extract frames from video | ❌ Not supported | ❌ Not supported | ❌ Not supported | ❌ Not supported |
 | **WebP Support** | ✅ Supported | ✅ Supported | ✅ Supported | ✅ Supported | ✅ Supported |
 | **Progressive Loading** | ❌ Not supported | ✅ Supported | ✅ Supported | ✅ Supported | ❌ Not supported |
 | **Learning Curve** | ⭐⭐ Simple and intuitive | ⭐⭐⭐ Complex features | ⭐⭐ Relatively simple | ⭐⭐⭐ Complex setup | ⭐ Simple |
@@ -228,9 +249,12 @@ Lumen.with(context)
   - ✅ Kotlin-first experience with DSL and coroutines
   - ✅ Jetpack Compose projects
   - ✅ Want small package size with modular design
+  - ✅ Need GIF animation support (API 28+)
+  - ✅ Need video frame extraction
+  - ✅ Need disk cache with "no plaintext on disk" support
 
 - **Choose Glide**: 
-  - ✅ Need GIF animation support
+  - ✅ Need GIF animation support on older Android versions (< API 28)
   - ✅ Need very mature ecosystem with many plugins
   - ✅ Java projects or mixed Java/Kotlin projects
   - ✅ Need advanced caching strategies
@@ -284,17 +308,13 @@ Lumen.with(context)
 
 ### ❌ Unsuitable Scenarios
 
-1. **GIF / Video Frame**
-   - Current version does not support GIF animation
-   - Does not support video frame extraction
-
-2. **Complex Animations**
+1. **Complex Animations**
    - Does not support image loading animations (e.g., fade in/out)
    - Does not support transition animations
 
-3. **Automatic Cross-process Cache**
-   - Current version only supports memory cache
-   - Does not support automatic disk cache (can be implemented manually)
+2. **Progressive Loading**
+   - Does not support progressive JPEG loading
+   - Does not support streaming image loading
 
 4. **Java Projects**
    - Can be used in Java but experience is not as good as Kotlin
@@ -390,10 +410,12 @@ class ImageAdapter : RecyclerView.Adapter<ImageAdapter.ViewHolder>() {
 
 ```kotlin
 class CustomDecryptor : ImageDecryptor {
-    override suspend fun decrypt(data: ByteArray): ByteArray {
+    override fun decrypt(input: ByteArray): ByteArray {
         // Custom decryption logic
         return decryptedData
     }
+    
+    override val key: String = "custom_decryptor_v1"
 }
 
 Lumen.with(context)
@@ -401,6 +423,67 @@ Lumen.with(context)
         decryptor(CustomDecryptor())
     }
     .into(imageView)
+```
+
+### GIF Animation
+
+```kotlin
+// Automatic GIF detection and playback (API 28+)
+Lumen.with(context)
+    .load("https://example.com/animation.gif")
+    .into(imageView)
+// Animation automatically starts on API 28+
+
+// In Compose
+LumenImage(
+    url = "https://example.com/animation.gif",
+    modifier = Modifier.size(200.dp)
+)
+```
+
+### Video Frame Extraction
+
+```kotlin
+// Extract first frame from video file
+Lumen.with(context)
+    .loadVideo(videoFile)
+    .into(imageView)
+
+// Extract frame at specific time point (5 seconds)
+val timeUs = 5_000_000L // 5 seconds = 5,000,000 microseconds
+Lumen.with(context)
+    .loadVideo(videoFile, timeUs)
+    .into(imageView)
+
+// Extract from video Uri
+Lumen.with(context)
+    .loadVideo(videoUri, timeUs)
+    .into(imageView)
+
+// Video frame with transformations
+Lumen.with(context)
+    .loadVideo(videoFile) {
+        roundedCorners(16f)
+        blur(10f)
+    }
+    .into(imageView)
+```
+
+### Disk Cache Management
+
+```kotlin
+// Clear disk cache
+lifecycleScope.launch {
+    Lumen.with(context).clearDiskCache()
+}
+
+// Clear all caches (memory + disk)
+lifecycleScope.launch {
+    Lumen.with(context).clearCache()
+}
+
+// Clear only memory cache
+Lumen.with(context).clearMemoryCache()
 ```
 
 ---
@@ -412,35 +495,47 @@ Lumen.with(context)
 ```
 ImageRequest (immutable data class)
    ↓
-[1] Memory Cache Check → If hit, return cached Bitmap
+[1] Memory Cache Check → If hit, return cached Bitmap/Drawable
    ↓
-[2] Fetcher (Network / File / Uri / Resource)
+[2] Disk Cache Check (for raw data) → If hit, skip fetching
+   ↓
+[3] Fetcher (Network / File / Uri / Resource / Video)
    - NetworkFetcher: HttpURLConnection-based network loading
    - FileFetcher: Local file system access
    - UriFetcher: ContentProvider access
    - ResourceFetcher: Android resource access
+   - Video: Direct frame extraction via VideoFrameExtractor
    ↓
-[3] Decryptor (Optional)
+[4] Disk Cache Store (for raw data, before decryption)
+   - Stores encrypted data (supports "no plaintext on disk")
+   - LRU-based eviction when cache size exceeded
+   ↓
+[5] Decryptor (Optional)
    - Custom ImageDecryptor interface
    - Supports encrypted images for AI scenarios
    - Decryption happens in memory (no disk I/O)
    ↓
-[4] Decoder (BitmapFactory)
-   - Uses Android BitmapFactory
+[6] Decoder (BitmapFactory / ImageDecoder)
+   - Uses Android BitmapFactory for static images
+   - Uses ImageDecoder for GIF animations (API 28+)
+   - Automatic GIF detection
    - Supports custom BitmapFactory.Options
    - Automatic error handling
    ↓
-[5] Transformer (Optional: rounded corners, rotation, crop, blur, etc.)
+[7] Transformer (Optional: rounded corners, rotation, crop, blur, etc.)
    - Applied directly to Bitmap pixels
    - Supports chained transformations
    - Smart View-level clipping for certain scaleTypes
+   - Note: Transformers only apply to static images, not GIF animations
    ↓
-[6] Memory Cache (LruCache)
+[8] Memory Cache (LruCache)
+   - Stores transformed Bitmap (for static images)
+   - GIF animations not cached (Drawable not cacheable)
    - Automatic cache key generation
    - Thread-safe operations
    - Configurable cache size
    ↓
-[7] Target (ImageView / Compose / Custom)
+[9] Target (ImageView / Compose / Custom)
    - ImageViewTarget: Automatic RecyclerView optimization
    - LumenImage: Compose composable
    - Custom targets via Flow collection
@@ -463,9 +558,10 @@ Lumen/
  │   ├── ImageState.kt         // State model (Sealed Class)
  │   ├── Fetcher.kt            // Data fetching (Network/File/Uri/Resource)
  │   ├── ImageDecryptor.kt     // Decryption interface
- │   ├── Decoder.kt             // Bitmap decoding
+ │   ├── Decoder.kt             // Bitmap decoding (static + GIF)
  │   ├── BitmapTransformer.kt  // Transformation interface
- │   └── Cache.kt               // Memory cache (LruCache)
+ │   ├── Cache.kt               // Memory cache (LruCache) + Disk cache
+ │   └── VideoFrameExtractor.kt // Video frame extraction
  │
  ├── lumen-view        // ImageView / ViewTarget / Compose support
  │   ├── RequestBuilder.kt     // DSL API builder
@@ -489,8 +585,9 @@ Lumen/
 ```kotlin
 sealed class ImageState {
     object Loading : ImageState()
-    data class Success(val bitmap: Bitmap) : ImageState()
-    data class Error(val throwable: Throwable) : ImageState()
+    data class Success(val bitmap: Bitmap) : ImageState()              // Static images
+    data class SuccessAnimated(val drawable: Drawable) : ImageState()  // GIF animations
+    data class Error(val throwable: Throwable? = null) : ImageState()
     object Fallback : ImageState()
 }
 ```
@@ -509,6 +606,100 @@ sealed class ImageState {
 ### More Examples
 
 Check the [sample-app](app/) module for complete example code.
+
+## 💡 Best Practices
+
+### 1. Disk Cache Strategy
+
+- **Storage**: Disk cache stores raw data (may be encrypted) before decryption
+- **Security**: Supports "no plaintext on disk" principle - decrypted data never touches disk
+- **Performance**: Automatic LRU eviction when cache size exceeds limit (default 50MB)
+- **Customization**: Can configure cache size when creating `DiskCache` instance
+
+```kotlin
+// Custom disk cache size
+val diskCache = DiskCache(context, maxSizeBytes = 100 * 1024 * 1024) // 100MB
+val lumen = Lumen.create(context, diskCache = diskCache)
+```
+
+### 2. GIF Animation Best Practices
+
+- **API Compatibility**: 
+  - API 28+: Full animation support with `ImageDecoder`
+  - API < 28: Automatic fallback to static image (first frame)
+- **Memory**: GIF animations are not cached in memory (Drawable is not cacheable)
+- **Transformers**: Transformers do not apply to GIF animations (only to static images)
+- **Auto-play**: Animations automatically start, no manual call needed
+
+### 3. Video Frame Extraction Best Practices
+
+- **Time Unit**: Use microseconds (1 second = 1,000,000 microseconds)
+- **Performance**: Frame extraction runs on IO thread, results are cached
+- **Transformers**: All transformers work with extracted frames
+- **Caching**: Extracted frames are cached in memory for performance
+
+```kotlin
+// Extract frame at 5 seconds
+val timeUs = 5_000_000L // 5 seconds
+
+// Extract frame at 30% of video duration
+val duration = VideoFrameExtractor.getDuration(context, videoUri)
+val timeUs = (duration * 0.3).toLong()
+```
+
+### 4. Cache Management
+
+```kotlin
+// Clear memory cache (synchronous)
+Lumen.with(context).clearMemoryCache()
+
+// Clear disk cache (suspend function)
+lifecycleScope.launch {
+    Lumen.with(context).clearDiskCache()
+}
+
+// Clear all caches
+lifecycleScope.launch {
+    Lumen.with(context).clearCache()
+}
+```
+
+### 5. RecyclerView Optimization
+
+- Lumen automatically cancels loading tasks when views are recycled
+- No manual cancellation needed in most cases
+- Placeholder images are shown immediately
+
+```kotlin
+// Automatic - no extra code needed
+override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+    Lumen.with(holder.itemView.context)
+        .load(images[position])
+        .into(holder.imageView)
+}
+```
+
+### 6. Error Handling
+
+```kotlin
+// Handle different states
+Lumen.with(context)
+    .load(url)
+    .into(imageView) // Automatic error handling with error drawable
+
+// Or use Flow for custom handling
+Lumen.with(context)
+    .load(request)
+    .collect { state ->
+        when (state) {
+            is ImageState.Success -> { /* Show image */ }
+            is ImageState.SuccessAnimated -> { /* Show GIF */ }
+            is ImageState.Error -> { /* Handle error */ }
+            is ImageState.Loading -> { /* Show loading */ }
+            is ImageState.Fallback -> { /* Show fallback UI */ }
+        }
+    }
+```
 
 ---
 

@@ -66,11 +66,12 @@
   - 支持链式转换
   - 智能 View 层裁剪（针对某些 scaleType：centerCrop、fitXY）
   
-- ✅ **多数据源**：支持 URL、File、Uri、Resource ID
+- ✅ **多数据源**：支持 URL、File、Uri、Resource ID、Video
   - 基于 HttpURLConnection 的网络 URL 加载
   - 本地文件系统访问
   - Android ContentProvider Uri 支持
   - Android 资源 ID 支持
+  - 视频文件帧提取（File 和 Uri）
   
 - ✅ **Compose 支持**：原生 Jetpack Compose 组件和状态管理
   - `LumenImage` 可组合函数，易于集成
@@ -81,6 +82,24 @@
   - 默认缓存大小：可用内存的 1/8
   - 自动生成缓存 Key（包含数据、解密器、转换器）
   - 线程安全的缓存操作
+  
+- ✅ **磁盘缓存**：原始图片数据的自动磁盘缓存
+  - 默认缓存大小：50MB
+  - 基于 LRU 的缓存淘汰策略
+  - 存储加密数据（支持"不落明文磁盘"原则）
+  - 基于数据源自动生成缓存 Key
+  
+- ✅ **GIF 动画支持**：自动检测 GIF 并播放动画
+  - API 28+ 完整动画支持（使用 ImageDecoder）
+  - API < 28 自动降级为静态图片（第一帧）
+  - 自动启动动画播放
+  - 与现有 API 无缝集成
+  
+- ✅ **视频帧提取**：从视频文件中提取帧
+  - 支持 File 和 Uri 两种数据源
+  - 支持提取任意时间点的帧（微秒单位）
+  - 支持所有转换器（圆角、模糊等）
+  - 提取的帧自动内存缓存
 
 ### 技术亮点
 
@@ -92,7 +111,8 @@
   
 - 🎭 **状态管理**：Sealed Class 表示加载状态
   - `ImageState.Loading`：加载中
-  - `ImageState.Success(bitmap)`：加载成功
+  - `ImageState.Success(bitmap)`：加载成功（静态图片）
+  - `ImageState.SuccessAnimated(drawable)`：加载成功（GIF 动画）
   - `ImageState.Error(throwable)`：加载失败
   - `ImageState.Fallback`：兜底状态，用于自定义处理
   
@@ -168,8 +188,9 @@ Lumen.with(context)
 | **Compose 支持** | ✅ 原生 Compose 组件 | ⚠️ 需要适配 | ✅ 原生支持 | ❌ 无官方支持 | ❌ 无官方支持 |
 | **加密图片支持** | ✅ 内置 Decryptor 接口 | ❌ 需要自定义 | ❌ 需要自定义 | ❌ 需要自定义 | ❌ 需要自定义 |
 | **内存管理** | ✅ LruCache，自动内存管理 | ✅ 高级内存管理 | ✅ 自动内存管理 | ✅ Ashmem（Android <5.0），高级 | ⚠️ 基础内存管理 |
-| **磁盘缓存** | ⚠️ 需手动实现 | ✅ 自动磁盘缓存 | ✅ 自动磁盘缓存 | ✅ 自动磁盘缓存 | ✅ 自动磁盘缓存 |
-| **GIF 支持** | ❌ 不支持 | ✅ 完整支持 | ✅ 完整支持 | ✅ 完整支持 | ❌ 不支持 |
+| **磁盘缓存** | ✅ 自动磁盘缓存（默认 50MB） | ✅ 自动磁盘缓存 | ✅ 自动磁盘缓存 | ✅ 自动磁盘缓存 | ✅ 自动磁盘缓存 |
+| **GIF 支持** | ✅ 完整支持（API 28+），<28 降级 | ✅ 完整支持 | ✅ 完整支持 | ✅ 完整支持 | ❌ 不支持 |
+| **视频帧** | ✅ 从视频提取帧 | ❌ 不支持 | ❌ 不支持 | ❌ 不支持 | ❌ 不支持 |
 | **WebP 支持** | ✅ 支持 | ✅ 支持 | ✅ 支持 | ✅ 支持 | ✅ 支持 |
 | **渐进式加载** | ❌ 不支持 | ✅ 支持 | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
 | **学习曲线** | ⭐⭐ 简单直观 | ⭐⭐⭐ 功能复杂 | ⭐⭐ 相对简单 | ⭐⭐⭐ 配置复杂 | ⭐ 简单 |
@@ -227,9 +248,12 @@ Lumen.with(context)
   - ✅ Kotlin-first 体验，DSL 和协程
   - ✅ Jetpack Compose 项目
   - ✅ 需要小包体积和模块化设计
+  - ✅ 需要 GIF 动画支持（API 28+）
+  - ✅ 需要视频帧提取
+  - ✅ 需要磁盘缓存且支持"不落明文磁盘"
 
 - **选择 Glide**： 
-  - ✅ 需要 GIF 动画支持
+  - ✅ 需要在较旧 Android 版本（< API 28）上支持 GIF 动画
   - ✅ 需要非常成熟的生态和大量插件
   - ✅ Java 项目或混合 Java/Kotlin 项目
   - ✅ 需要高级缓存策略
@@ -283,17 +307,13 @@ Lumen.with(context)
 
 ### ❌ 不适用场景
 
-1. **GIF / Video Frame**
-   - 当前版本不支持 GIF 动画
-   - 不支持视频帧提取
-
-2. **复杂动画**
+1. **复杂动画**
    - 不支持图片加载动画（如淡入淡出）
    - 不支持过渡动画
 
-3. **自动跨进程缓存**
-   - 当前版本仅支持内存缓存
-   - 不支持自动磁盘缓存（可自行实现）
+2. **渐进式加载**
+   - 不支持渐进式 JPEG 加载
+   - 不支持流式图片加载
 
 4. **Java 项目**
    - 虽然可以在 Java 中使用，但体验不如 Kotlin
@@ -389,10 +409,12 @@ class ImageAdapter : RecyclerView.Adapter<ImageAdapter.ViewHolder>() {
 
 ```kotlin
 class CustomDecryptor : ImageDecryptor {
-    override suspend fun decrypt(data: ByteArray): ByteArray {
+    override fun decrypt(input: ByteArray): ByteArray {
         // 自定义解密逻辑
         return decryptedData
     }
+    
+    override val key: String = "custom_decryptor_v1"
 }
 
 Lumen.with(context)
@@ -400,6 +422,67 @@ Lumen.with(context)
         decryptor(CustomDecryptor())
     }
     .into(imageView)
+```
+
+### GIF 动画
+
+```kotlin
+// 自动检测 GIF 并播放动画（API 28+）
+Lumen.with(context)
+    .load("https://example.com/animation.gif")
+    .into(imageView)
+// API 28+ 自动启动动画
+
+// Compose 中使用
+LumenImage(
+    url = "https://example.com/animation.gif",
+    modifier = Modifier.size(200.dp)
+)
+```
+
+### 视频帧提取
+
+```kotlin
+// 从视频文件提取第一帧
+Lumen.with(context)
+    .loadVideo(videoFile)
+    .into(imageView)
+
+// 提取指定时间点的帧（5秒）
+val timeUs = 5_000_000L // 5秒 = 5,000,000微秒
+Lumen.with(context)
+    .loadVideo(videoFile, timeUs)
+    .into(imageView)
+
+// 从视频 Uri 提取
+Lumen.with(context)
+    .loadVideo(videoUri, timeUs)
+    .into(imageView)
+
+// 视频帧 + 转换器
+Lumen.with(context)
+    .loadVideo(videoFile) {
+        roundedCorners(16f)
+        blur(10f)
+    }
+    .into(imageView)
+```
+
+### 磁盘缓存管理
+
+```kotlin
+// 清空磁盘缓存
+lifecycleScope.launch {
+    Lumen.with(context).clearDiskCache()
+}
+
+// 清空所有缓存（内存 + 磁盘）
+lifecycleScope.launch {
+    Lumen.with(context).clearCache()
+}
+
+// 仅清空内存缓存
+Lumen.with(context).clearMemoryCache()
 ```
 
 ---
@@ -411,35 +494,47 @@ Lumen.with(context)
 ```
 ImageRequest（不可变 Data Class）
    ↓
-[1] 内存缓存检查 → 如果命中，返回缓存的 Bitmap
+[1] 内存缓存检查 → 如果命中，返回缓存的 Bitmap/Drawable
    ↓
-[2] Fetcher（Network / File / Uri / Resource）
+[2] 磁盘缓存检查（原始数据） → 如果命中，跳过获取步骤
+   ↓
+[3] Fetcher（Network / File / Uri / Resource / Video）
    - NetworkFetcher：基于 HttpURLConnection 的网络加载
    - FileFetcher：本地文件系统访问
    - UriFetcher：ContentProvider 访问
    - ResourceFetcher：Android 资源访问
+   - Video：直接通过 VideoFrameExtractor 提取帧
    ↓
-[3] Decryptor（可选）
+[4] 磁盘缓存存储（原始数据，解密前）
+   - 存储加密数据（支持"不落明文磁盘"）
+   - 超过缓存大小时基于 LRU 淘汰
+   ↓
+[5] Decryptor（可选）
    - 自定义 ImageDecryptor 接口
    - 支持 AI 场景的加密图片
    - 内存中解密（无磁盘 I/O）
    ↓
-[4] Decoder（BitmapFactory）
-   - 使用 Android BitmapFactory
+[6] Decoder（BitmapFactory / ImageDecoder）
+   - 静态图片使用 Android BitmapFactory
+   - GIF 动画使用 ImageDecoder（API 28+）
+   - 自动检测 GIF 格式
    - 支持自定义 BitmapFactory.Options
    - 自动错误处理
    ↓
-[5] Transformer（可选：圆角、旋转、裁剪、模糊等）
+[7] Transformer（可选：圆角、旋转、裁剪、模糊等）
    - 直接作用于 Bitmap 像素
    - 支持链式转换
    - 针对某些 scaleType 的智能 View 层裁剪
+   - 注意：转换器仅适用于静态图片，不适用于 GIF 动画
    ↓
-[6] 内存缓存（LruCache）
+[8] 内存缓存（LruCache）
+   - 存储转换后的 Bitmap（静态图片）
+   - GIF 动画不缓存（Drawable 不可缓存）
    - 自动生成缓存 Key
    - 线程安全操作
    - 可配置缓存大小
    ↓
-[7] Target（ImageView / Compose / Custom）
+[9] Target（ImageView / Compose / Custom）
    - ImageViewTarget：自动 RecyclerView 优化
    - LumenImage：Compose 可组合函数
    - 通过 Flow 收集实现自定义目标
@@ -462,9 +557,10 @@ Lumen/
  │   ├── ImageState.kt         // 状态模型（Sealed Class）
  │   ├── Fetcher.kt            // 数据获取（Network/File/Uri/Resource）
  │   ├── ImageDecryptor.kt     // 解密接口
- │   ├── Decoder.kt             // Bitmap 解码
+ │   ├── Decoder.kt             // Bitmap 解码（静态 + GIF）
  │   ├── BitmapTransformer.kt  // 转换接口
- │   └── Cache.kt               // 内存缓存（LruCache）
+ │   ├── Cache.kt               // 内存缓存（LruCache）+ 磁盘缓存
+ │   └── VideoFrameExtractor.kt // 视频帧提取
  │
  ├── lumen-view        // ImageView / ViewTarget / Compose 支持
  │   ├── RequestBuilder.kt     // DSL API 构建器
@@ -488,8 +584,9 @@ Lumen/
 ```kotlin
 sealed class ImageState {
     object Loading : ImageState()
-    data class Success(val bitmap: Bitmap) : ImageState()
-    data class Error(val throwable: Throwable) : ImageState()
+    data class Success(val bitmap: Bitmap) : ImageState()              // 静态图片
+    data class SuccessAnimated(val drawable: Drawable) : ImageState() // GIF 动画
+    data class Error(val throwable: Throwable? = null) : ImageState()
     object Fallback : ImageState()
 }
 ```
@@ -503,11 +600,105 @@ sealed class ImageState {
 - [核心 API](docs/api-core.md)
 - [View API](docs/api-view.md)
 - [Compose API](docs/api-compose.md)
-- [Transform API](docs/api-transform.md)
+- [转换 API](docs/api-transform.md)
 
 ### 更多示例
 
 查看 [sample-app](app/) 模块获取完整示例代码。
+
+## 💡 最佳实践
+
+### 1. 磁盘缓存策略
+
+- **存储方式**：磁盘缓存存储原始数据（可能是加密的），在解密之前
+- **安全性**：支持"不落明文磁盘"原则 - 解密后的数据永远不会落盘
+- **性能**：超过缓存大小限制时自动 LRU 淘汰（默认 50MB）
+- **自定义**：创建 `DiskCache` 实例时可以配置缓存大小
+
+```kotlin
+// 自定义磁盘缓存大小
+val diskCache = DiskCache(context, maxSizeBytes = 100 * 1024 * 1024) // 100MB
+val lumen = Lumen.create(context, diskCache = diskCache)
+```
+
+### 2. GIF 动画最佳实践
+
+- **API 兼容性**：
+  - API 28+：使用 `ImageDecoder` 完整动画支持
+  - API < 28：自动降级为静态图片（第一帧）
+- **内存**：GIF 动画不存入内存缓存（Drawable 不可缓存）
+- **转换器**：转换器不适用于 GIF 动画（仅适用于静态图片）
+- **自动播放**：动画自动启动，无需手动调用
+
+### 3. 视频帧提取最佳实践
+
+- **时间单位**：使用微秒（1秒 = 1,000,000微秒）
+- **性能**：帧提取在 IO 线程执行，结果会被缓存
+- **转换器**：所有转换器都适用于提取的帧
+- **缓存**：提取的帧会缓存到内存以提升性能
+
+```kotlin
+// 提取 5 秒处的帧
+val timeUs = 5_000_000L // 5秒
+
+// 提取视频 30% 时间点的帧
+val duration = VideoFrameExtractor.getDuration(context, videoUri)
+val timeUs = (duration * 0.3).toLong()
+```
+
+### 4. 缓存管理
+
+```kotlin
+// 清空内存缓存（同步）
+Lumen.with(context).clearMemoryCache()
+
+// 清空磁盘缓存（suspend 函数）
+lifecycleScope.launch {
+    Lumen.with(context).clearDiskCache()
+}
+
+// 清空所有缓存
+lifecycleScope.launch {
+    Lumen.with(context).clearCache()
+}
+```
+
+### 5. RecyclerView 优化
+
+- Lumen 在 View 回收时自动取消加载任务
+- 大多数情况下无需手动取消
+- 占位图立即显示
+
+```kotlin
+// 自动处理 - 无需额外代码
+override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+    Lumen.with(holder.itemView.context)
+        .load(images[position])
+        .into(holder.imageView)
+}
+```
+
+### 6. 错误处理
+
+```kotlin
+// 处理不同状态
+Lumen.with(context)
+    .load(url)
+    .into(imageView) // 自动错误处理，显示错误图片
+
+// 或使用 Flow 进行自定义处理
+Lumen.with(context)
+    .load(request)
+    .collect { state ->
+        when (state) {
+            is ImageState.Success -> { /* 显示图片 */ }
+            is ImageState.SuccessAnimated -> { /* 显示 GIF */ }
+            is ImageState.Error -> { /* 处理错误 */ }
+            is ImageState.Loading -> { /* 显示加载中 */ }
+            is ImageState.Fallback -> { /* 显示兜底 UI */ }
+        }
+    }
+```
 
 ---
 
