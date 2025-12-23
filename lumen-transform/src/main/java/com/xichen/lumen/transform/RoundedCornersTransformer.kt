@@ -21,11 +21,11 @@ import com.xichen.lumen.core.BitmapTransformer
  * ```
  */
 class RoundedCornersTransformer(
-    private val radius: Float = 0f,
-    private val topLeft: Float = 0f,
-    private val topRight: Float = 0f,
-    private val bottomRight: Float = 0f,
-    private val bottomLeft: Float = 0f
+    val radius: Float = 0f,
+    val topLeft: Float = 0f,
+    val topRight: Float = 0f,
+    val bottomRight: Float = 0f,
+    val bottomLeft: Float = 0f
 ) : BitmapTransformer {
 
     init {
