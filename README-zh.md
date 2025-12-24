@@ -97,6 +97,13 @@
   - 支持提取任意时间点的帧（微秒单位）
   - 支持所有转换器（圆角、模糊等）
   - 提取的帧自动内存缓存
+  
+- ✅ **渐进式加载**：渐进式 JPEG 加载支持
+  - 网络图片的流式加载
+  - 渐进式预览显示（从低质量到高质量）
+  - 仅对网络 URL 有效
+  - 与现有 API 无缝集成
+  - 支持所有转换器
 
 ### 技术亮点
 
@@ -108,6 +115,7 @@
   
 - 🎭 **状态管理**：Sealed Class 表示加载状态
   - `ImageState.Loading`：加载中
+  - `ImageState.Progressive(bitmap, progress)`：渐进式加载预览（低质量预览图）
   - `ImageState.Success(bitmap)`：加载成功（静态图片）
   - `ImageState.SuccessAnimated(drawable)`：加载成功（GIF 动画）
   - `ImageState.Error(throwable)`：加载失败
@@ -189,7 +197,7 @@ Lumen.with(context)
 | **GIF 支持** | ✅ 完整支持（API 28+），<28 降级 | ✅ 完整支持 | ✅ 完整支持 | ✅ 完整支持 | ❌ 不支持 |
 | **视频帧** | ✅ 从视频提取帧 | ❌ 不支持 | ❌ 不支持 | ❌ 不支持 | ❌ 不支持 |
 | **WebP 支持** | ✅ 支持 | ✅ 支持 | ✅ 支持 | ✅ 支持 | ✅ 支持 |
-| **渐进式加载** | ❌ 不支持 | ✅ 支持 | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
+| **渐进式加载** | ✅ 支持（仅网络） | ✅ 支持 | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
 | **学习曲线** | ⭐⭐ 简单直观 | ⭐⭐⭐ 功能复杂 | ⭐⭐ 相对简单 | ⭐⭐⭐ 配置复杂 | ⭐ 简单 |
 | **包体积** | 📦 小（~50KB 核心，模块化） | 📦📦 中等（~475KB） | 📦 小（~200KB） | 📦📦📦 大（~3.4MB） | 📦 小（~120KB） |
 | **API 设计** | ✅ 现代 DSL，类型安全 | ⚠️ Builder 模式 | ✅ 现代 Kotlin API | ⚠️ 复杂 API | ✅ 简单 API |
@@ -248,6 +256,7 @@ Lumen.with(context)
   - ✅ 需要 GIF 动画支持（API 28+）
   - ✅ 需要视频帧提取
   - ✅ 需要磁盘缓存且支持"不落明文磁盘"
+  - ✅ 需要渐进式加载（大图或网络慢的场景）
 
 - **选择 Glide**： 
   - ✅ 需要在较旧 Android 版本（< API 28）上支持 GIF 动画
@@ -308,9 +317,9 @@ Lumen.with(context)
    - 不支持图片加载动画（如淡入淡出）
    - 不支持过渡动画
 
-2. **渐进式加载**
-   - 不支持渐进式 JPEG 加载
-   - 不支持流式图片加载
+2. **复杂动画**
+   - 不支持图片加载动画（如淡入淡出）
+   - 不支持过渡动画
 
 4. **Java 项目**
    - 虽然可以在 Java 中使用，但体验不如 Kotlin
@@ -465,6 +474,37 @@ Lumen.with(context)
     .into(imageView)
 ```
 
+### 渐进式加载
+
+```kotlin
+// 为网络图片启用渐进式加载
+Lumen.with(context)
+    .load("https://example.com/large-image.jpg") {
+        progressiveLoading()  // 启用渐进式加载
+        roundedCorners(20f)
+    }
+    .into(imageView)
+
+// Compose 中使用
+LumenImage(
+    url = "https://example.com/large-image.jpg",
+    modifier = Modifier.size(200.dp),
+    block = {
+        progressiveLoading()  // 启用渐进式加载
+        roundedCorners(20f)
+    }
+)
+
+// 渐进式加载 + 占位图
+Lumen.with(context)
+    .load("https://example.com/large-image.jpg") {
+        progressiveLoading()
+        placeholder(R.drawable.placeholder)
+        error(R.drawable.error)
+    }
+    .into(imageView)
+```
+
 ### 磁盘缓存管理
 
 ```kotlin
@@ -581,6 +621,7 @@ Lumen/
 ```kotlin
 sealed class ImageState {
     object Loading : ImageState()
+    data class Progressive(val bitmap: Bitmap, val progress: Float) : ImageState()  // 渐进式加载预览
     data class Success(val bitmap: Bitmap) : ImageState()              // 静态图片
     data class SuccessAnimated(val drawable: Drawable) : ImageState() // GIF 动画
     data class Error(val throwable: Throwable? = null) : ImageState()
@@ -675,7 +716,37 @@ override fun onBindViewHolder(holder: ViewHolder, position: Int) {
 }
 ```
 
-### 6. 错误处理
+### 6. 渐进式加载最佳实践
+
+- **何时使用**：
+  - 大图片（> 500KB）或网络较慢的场景
+  - 详情页大图
+  - 需要提升慢网络下的用户体验
+- **何时不使用**：
+  - 小图片（< 100KB）- 使用普通加载
+  - 列表缩略图 - 使用普通加载
+  - 非网络数据源（File、Uri、Resource）- 渐进式加载仅对网络 URL 有效
+- **性能**：渐进式加载可以与所有转换器配合使用，但转换器会应用到最终图片，而非预览图
+
+```kotlin
+// 最佳实践：大图使用渐进式加载
+Lumen.with(context)
+    .load("https://example.com/large-image.jpg") {
+        progressiveLoading()  // 大图推荐使用
+        roundedCorners(20f)
+    }
+    .into(imageView)
+
+// 最佳实践：小图使用普通加载
+Lumen.with(context)
+    .load("https://example.com/thumbnail.jpg") {
+        // 小图不需要渐进式加载
+        roundedCorners(12f)
+    }
+    .into(imageView)
+```
+
+### 7. 错误处理
 
 ```kotlin
 // 处理不同状态
@@ -690,6 +761,7 @@ Lumen.with(context)
         when (state) {
             is ImageState.Success -> { /* 显示图片 */ }
             is ImageState.SuccessAnimated -> { /* 显示 GIF */ }
+            is ImageState.Progressive -> { /* 显示渐进式预览 */ }
             is ImageState.Error -> { /* 处理错误 */ }
             is ImageState.Loading -> { /* 显示加载中 */ }
             is ImageState.Fallback -> { /* 显示兜底 UI */ }

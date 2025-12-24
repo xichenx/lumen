@@ -98,6 +98,13 @@ While there are excellent image loading libraries like Glide and Coil in the And
   - Extract frame at any time point (in microseconds)
   - All transformers supported (rounded corners, blur, etc.)
   - Automatic memory caching for extracted frames
+  
+- ✅ **Progressive Loading**: Progressive JPEG loading support
+  - Stream-based loading for network images
+  - Progressive preview display (low quality to high quality)
+  - Only works with network URLs
+  - Seamless integration with existing API
+  - Works with all transformers
 
 ### Technical Highlights
 
@@ -109,6 +116,7 @@ While there are excellent image loading libraries like Glide and Coil in the And
   
 - 🎭 **State Management**: Sealed Class for loading states
   - `ImageState.Loading`: Loading in progress
+  - `ImageState.Progressive(bitmap, progress)`: Progressive loading preview (low quality preview)
   - `ImageState.Success(bitmap)`: Loaded successfully (static images)
   - `ImageState.SuccessAnimated(drawable)`: Loaded successfully (GIF animations)
   - `ImageState.Error(throwable)`: Load failed
@@ -190,7 +198,7 @@ Lumen.with(context)
 | **GIF Support** | ✅ Full support (API 28+), fallback on <28 | ✅ Full support | ✅ Full support | ✅ Full support | ❌ Not supported |
 | **Video Frame** | ✅ Extract frames from video | ❌ Not supported | ❌ Not supported | ❌ Not supported | ❌ Not supported |
 | **WebP Support** | ✅ Supported | ✅ Supported | ✅ Supported | ✅ Supported | ✅ Supported |
-| **Progressive Loading** | ❌ Not supported | ✅ Supported | ✅ Supported | ✅ Supported | ❌ Not supported |
+| **Progressive Loading** | ✅ Supported (network only) | ✅ Supported | ✅ Supported | ✅ Supported | ❌ Not supported |
 | **Learning Curve** | ⭐⭐ Simple and intuitive | ⭐⭐⭐ Complex features | ⭐⭐ Relatively simple | ⭐⭐⭐ Complex setup | ⭐ Simple |
 | **Package Size** | 📦 Small (~50KB core, modular) | 📦📦 Medium (~475KB) | 📦 Small (~200KB) | 📦📦📦 Large (~3.4MB) | 📦 Small (~120KB) |
 | **API Design** | ✅ Modern DSL, type-safe | ⚠️ Builder pattern | ✅ Modern Kotlin API | ⚠️ Complex API | ✅ Simple API |
@@ -249,6 +257,7 @@ Lumen.with(context)
   - ✅ Need GIF animation support (API 28+)
   - ✅ Need video frame extraction
   - ✅ Need disk cache with "no plaintext on disk" support
+  - ✅ Need progressive loading for large images or slow networks
 
 - **Choose Glide**: 
   - ✅ Need GIF animation support on older Android versions (< API 28)
@@ -309,9 +318,9 @@ Lumen.with(context)
    - Does not support image loading animations (e.g., fade in/out)
    - Does not support transition animations
 
-2. **Progressive Loading**
-   - Does not support progressive JPEG loading
-   - Does not support streaming image loading
+2. **Complex Animations**
+   - Does not support image loading animations (e.g., fade in/out)
+   - Does not support transition animations
 
 4. **Java Projects**
    - Can be used in Java but experience is not as good as Kotlin
@@ -466,6 +475,37 @@ Lumen.with(context)
     .into(imageView)
 ```
 
+### Progressive Loading
+
+```kotlin
+// Enable progressive loading for network images
+Lumen.with(context)
+    .load("https://example.com/large-image.jpg") {
+        progressiveLoading()  // Enable progressive loading
+        roundedCorners(20f)
+    }
+    .into(imageView)
+
+// In Compose
+LumenImage(
+    url = "https://example.com/large-image.jpg",
+    modifier = Modifier.size(200.dp),
+    block = {
+        progressiveLoading()  // Enable progressive loading
+        roundedCorners(20f)
+    }
+)
+
+// Progressive loading with placeholder
+Lumen.with(context)
+    .load("https://example.com/large-image.jpg") {
+        progressiveLoading()
+        placeholder(R.drawable.placeholder)
+        error(R.drawable.error)
+    }
+    .into(imageView)
+```
+
 ### Disk Cache Management
 
 ```kotlin
@@ -582,6 +622,7 @@ Lumen/
 ```kotlin
 sealed class ImageState {
     object Loading : ImageState()
+    data class Progressive(val bitmap: Bitmap, val progress: Float) : ImageState()  // Progressive loading preview
     data class Success(val bitmap: Bitmap) : ImageState()              // Static images
     data class SuccessAnimated(val drawable: Drawable) : ImageState()  // GIF animations
     data class Error(val throwable: Throwable? = null) : ImageState()
@@ -676,7 +717,37 @@ override fun onBindViewHolder(holder: ViewHolder, position: Int) {
 }
 ```
 
-### 6. Error Handling
+### 6. Progressive Loading Best Practices
+
+- **When to Use**: 
+  - Large images (> 500KB) or slow network connections
+  - Detail pages with high-resolution images
+  - User experience improvement for slow networks
+- **When NOT to Use**:
+  - Small images (< 100KB) - use normal loading
+  - List thumbnails - use normal loading
+  - Non-network sources (File, Uri, Resource) - progressive loading only works with network URLs
+- **Performance**: Progressive loading works with all transformers, but transformers are applied to the final image, not preview images
+
+```kotlin
+// Best practice: Use for large images
+Lumen.with(context)
+    .load("https://example.com/large-image.jpg") {
+        progressiveLoading()  // Recommended for large images
+        roundedCorners(20f)
+    }
+    .into(imageView)
+
+// Best practice: Normal loading for small images
+Lumen.with(context)
+    .load("https://example.com/thumbnail.jpg") {
+        // No progressive loading for small images
+        roundedCorners(12f)
+    }
+    .into(imageView)
+```
+
+### 7. Error Handling
 
 ```kotlin
 // Handle different states
@@ -691,6 +762,7 @@ Lumen.with(context)
         when (state) {
             is ImageState.Success -> { /* Show image */ }
             is ImageState.SuccessAnimated -> { /* Show GIF */ }
+            is ImageState.Progressive -> { /* Show progressive preview */ }
             is ImageState.Error -> { /* Handle error */ }
             is ImageState.Loading -> { /* Show loading */ }
             is ImageState.Fallback -> { /* Show fallback UI */ }
