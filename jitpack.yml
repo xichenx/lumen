@@ -7,12 +7,17 @@ before_install:
   - ./gradlew wrapper --gradle-version 8.5
 
 # 构建所有需要发布的模块
-# 注意：JitPack 会自动构建所有模块，包括聚合模块 lumen
+# 使用聚合任务提高构建效率，Gradle 会自动处理依赖关系
+# 如果聚合任务不可用，回退到单独发布每个模块
 build:
   commands:
     - ./gradlew clean
-    - ./gradlew :lumen-core:publishToMavenLocal
-    - ./gradlew :lumen-view:publishToMavenLocal
-    - ./gradlew :lumen-transform:publishToMavenLocal
-    - ./gradlew :lumen:publishToMavenLocal
+    - |
+      if ./gradlew tasks --all 2>/dev/null | grep -q "publishAllToMavenLocal"; then
+        echo "Using aggregated publish task..."
+        ./gradlew publishAllToMavenLocal --parallel --max-workers=4
+      else
+        echo "Using individual publish tasks..."
+        ./gradlew :lumen-core:publishToMavenLocal :lumen-transform:publishToMavenLocal :lumen-view:publishToMavenLocal :lumen:publishToMavenLocal --parallel --max-workers=4
+      fi
 

@@ -134,16 +134,64 @@ if (!isJitPack) {
             ?: System.getenv("SIGNING_SECRET_KEY_RING_FILE")
         
         if (signingKeyId != null && signingPassword != null && signingSecretKeyRingFile != null) {
-            val secretKeyRingFile = file(signingSecretKeyRingFile)
-            if (secretKeyRingFile.exists()) {
-                val secretKey = secretKeyRingFile.readText()
-                signing.useInMemoryPgpKeys(signingKeyId, secretKey, signingPassword)
-                signing.sign(publishing.publications["release"])
-            } else {
-                logger.warn("GPG secret key file not found: $signingSecretKeyRingFile, skipping signing")
+            try {
+                val secretKeyRingFile = file(signingSecretKeyRingFile)
+                if (secretKeyRingFile.exists()) {
+                    val secretKey = secretKeyRingFile.readText()
+                    if (secretKey.isBlank()) {
+                        logger.warn("GPG secret key file is empty: $signingSecretKeyRingFile, skipping signing")
+                        return@afterEvaluate
+                    }
+                    
+                    signing.useInMemoryPgpKeys(signingKeyId, secretKey, signingPassword)
+                    signing.sign(publishing.publications["release"])
+                    logger.info("✅ GPG signing configured for ${project.name}")
+                } else {
+                    logger.warn("⚠️  GPG secret key file not found: $signingSecretKeyRingFile, skipping signing")
+                }
+            } catch (e: Exception) {
+                logger.error("❌ Failed to configure GPG signing: ${e.message}", e)
+                throw e
             }
         } else {
-            logger.warn("GPG signing credentials not configured, skipping signing")
+            logger.warn("⚠️  GPG signing credentials not fully configured, skipping signing")
+            logger.debug("  SIGNING_KEY_ID: ${if (signingKeyId != null) "set" else "not set"}")
+            logger.debug("  SIGNING_PASSWORD: ${if (signingPassword != null) "set" else "not set"}")
+            logger.debug("  SIGNING_SECRET_KEY_RING_FILE: ${if (signingSecretKeyRingFile != null) "set" else "not set"}")
+        }
+    }
+}
+
+// 添加发布前验证任务
+afterEvaluate {
+    // 验证所有发布相关的任务
+    tasks.matching { task ->
+        task.name.startsWith("publish") && 
+        (task.name.contains("Release") || task.name == "publish" || task.name == "publishToMavenLocal")
+    }.configureEach { task ->
+        task.doFirst {
+            val publishing = extensions.findByType<PublishingExtension>()
+            if (publishing == null) {
+                throw GradleException("PublishingExtension not found for ${project.name}")
+            }
+            
+            val publication = publishing.publications.findByName("release")
+            if (publication == null) {
+                throw GradleException("Release publication not found for ${project.name}")
+            }
+            
+            // 验证版本号
+            if (version == "unspecified" || version.toString().isBlank()) {
+                throw GradleException("Version is not set for ${project.name}")
+            }
+            
+            // 验证 groupId
+            val groupId = (publication as? MavenPublication)?.groupId
+            if (groupId.isNullOrBlank()) {
+                throw GradleException("GroupId is not set for ${project.name}")
+            }
+            
+            logger.info("✅ Publishing ${project.name} version $version to group $groupId")
         }
     }
 }

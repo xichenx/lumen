@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+# 并发控制：同一 PR 的多个推送只运行最新的
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -13,6 +18,7 @@ jobs:
     strategy:
       matrix:
         java-version: [11, 17]
+      fail-fast: false  # 一个版本失败不影响其他版本
     
     steps:
       - name: Checkout code
@@ -27,15 +33,41 @@ jobs:
       
       - name: Setup Gradle
         uses: gradle/gradle-build-action@v2
+        with:
+          cache-read-only: false
+          gradle-home-cache-includes: |
+            caches
+            notifications
+            jdks
       
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
       
-      - name: Build all modules
-        run: ./gradlew clean build --stacktrace
+      - name: Validate Gradle configuration
+        run: |
+          echo "Validating Gradle configuration..."
+          ./gradlew tasks --all --console=plain | head -20
+          echo "✅ Gradle configuration is valid"
       
-      - name: Run tests
-        run: ./gradlew test --stacktrace
+      - name: Build and test
+        id: build_test
+        run: |
+          echo "Building and testing all modules with Java ${{ matrix.java-version }}..."
+          ./gradlew clean build test \
+            --parallel \
+            --max-workers=4 \
+            --stacktrace \
+            --no-daemon \
+            --console=plain
+          
+          if [ $? -eq 0 ]; then
+            echo "build_success=true" >> $GITHUB_OUTPUT
+            echo "✅ Build and test completed successfully"
+          else
+            echo "build_success=false" >> $GITHUB_OUTPUT
+            echo "❌ Build or test failed"
+            exit 1
+          fi
       
       - name: Upload test results
         if: always()
@@ -45,4 +77,32 @@ jobs:
           path: |
             **/build/test-results/**/*.xml
           retention-days: 7
+          compression-level: 6
+      
+      - name: Upload build artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-java-${{ matrix.java-version }}
+          path: |
+            **/build/**/*.log
+          retention-days: 3
+          compression-level: 6
+      
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## 📊 CI Summary (Java ${{ matrix.java-version }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Test | ${{ steps.build_test.outputs.build_success == 'true' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.build_test.outputs.build_success }}" == "true" ]; then
+            echo "### ✅ All checks passed!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Build or test failed" >> $GITHUB_STEP_SUMMARY
+            echo "Check the logs above for details." >> $GITHUB_STEP_SUMMARY
+          fi
 
