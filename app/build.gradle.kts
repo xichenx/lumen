@@ -40,20 +40,58 @@ android {
             val keyPassword = project.findProperty("KEY_PASSWORD") as String?
                 ?: System.getenv("KEY_PASSWORD")
             
+            // 调试信息
+            if (keystoreFile != null) {
+                println("🔍 Checking keystore file: $keystoreFile")
+                println("   Project root: ${project.rootDir}")
+                println("   Project dir: ${project.projectDir}")
+            }
+            
             // 只有当所有签名信息都配置完整时才设置签名配置
             if (keystoreFile != null && keystorePassword != null && keyAlias != null && keyPassword != null) {
-                val keystorePath = file(keystoreFile)
+                // 尝试多种路径解析方式
+                val keystorePath = when {
+                    // 绝对路径（Unix/Linux/Mac）或 Windows 绝对路径
+                    keystoreFile.startsWith("/") || (keystoreFile.length >= 2 && keystoreFile[1] == ':') -> {
+                        file(keystoreFile)
+                    }
+                    // 相对于项目根目录
+                    else -> {
+                        // 先尝试相对于项目根目录
+                        val rootPath = File(project.rootDir, keystoreFile)
+                        if (rootPath.exists()) {
+                            file(rootPath)
+                        } else {
+                            // 再尝试相对于当前模块目录
+                            val modulePath = File(project.projectDir, keystoreFile)
+                            file(modulePath)
+                        }
+                    }
+                }
+                
+                // 检查文件是否存在
                 if (keystorePath.exists()) {
                     storeFile = keystorePath
                     storePassword = keystorePassword
                     this.keyAlias = keyAlias
                     this.keyPassword = keyPassword
-                    println("✅ Release signing configured with keystore: $keystoreFile")
+                    println("✅ Release signing configured with keystore: ${keystorePath.absolutePath}")
                 } else {
-                    println("⚠️  Keystore file not found: $keystoreFile, release build will be unsigned")
+                    println("⚠️  Keystore file not found: $keystoreFile")
+                    println("   Tried paths:")
+                    println("     - ${File(project.rootDir, keystoreFile).absolutePath}")
+                    println("     - ${File(project.projectDir, keystoreFile).absolutePath}")
+                    println("   Current working directory: ${System.getProperty("user.dir")}")
+                    println("   Release build will be unsigned")
                 }
             } else {
+                val missing = mutableListOf<String>()
+                if (keystoreFile == null) missing.add("KEYSTORE_FILE")
+                if (keystorePassword == null) missing.add("KEYSTORE_PASSWORD")
+                if (keyAlias == null) missing.add("KEY_ALIAS")
+                if (keyPassword == null) missing.add("KEY_PASSWORD")
                 println("⚠️  Signing credentials not configured, release build will be unsigned")
+                println("   Missing: ${missing.joinToString(", ")}")
                 println("   Set KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD in gradle.properties or environment variables")
             }
         }

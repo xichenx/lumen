@@ -102,9 +102,22 @@ jobs:
             echo "KEY_ALIAS=$KEY_ALIAS_VALUE" >> $GITHUB_ENV
             echo "KEY_PASSWORD=$KEY_PASSWORD_VALUE" >> $GITHUB_ENV
             
+            # 同时写入 gradle.properties 以确保 Gradle 能读取到（作为备用方案）
+            # 先删除旧的签名配置（如果存在）
+            sed -i '/^# CI\/CD signing configuration (auto-generated)/,/^KEY_PASSWORD=/d' gradle.properties 2>/dev/null || true
+            
+            # 追加新的签名配置
+            echo "" >> gradle.properties
+            echo "# CI/CD signing configuration (auto-generated)" >> gradle.properties
+            echo "KEYSTORE_FILE=app/keystore/lumen-release.jks" >> gradle.properties
+            echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> gradle.properties
+            echo "KEY_ALIAS=$KEY_ALIAS_VALUE" >> gradle.properties
+            echo "KEY_PASSWORD=$KEY_PASSWORD_VALUE" >> gradle.properties
+            
             echo "✅ Signing configuration ready:"
             echo "   Keystore: app/keystore/lumen-release.jks"
             echo "   Alias: $KEY_ALIAS_VALUE"
+            echo "   Configuration written to gradle.properties"
           else
             echo "⚠️  Signing credentials not configured in GitHub Secrets"
             echo "   Release build will be unsigned (can be used for testing)"
@@ -231,13 +244,40 @@ jobs:
           echo "📋 Updated gradle.properties:"
           grep -E "^(APP_VERSION_NAME|APP_VERSION_CODE)=" gradle.properties || true
       
+      - name: Verify signing setup before build
+        if: github.event.inputs.build_type == 'release'
+        run: |
+          echo "🔍 Verifying signing setup before build..."
+          
+          # 检查 keystore 文件是否存在
+          if [ -f "app/keystore/lumen-release.jks" ]; then
+            echo "✅ Keystore file exists: app/keystore/lumen-release.jks"
+            ls -lh app/keystore/lumen-release.jks
+          else
+            echo "❌ Keystore file not found: app/keystore/lumen-release.jks"
+            exit 1
+          fi
+          
+          # 检查环境变量
+          echo ""
+          echo "📋 Environment variables:"
+          echo "   KEYSTORE_FILE=${KEYSTORE_FILE:-not set}"
+          echo "   KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:+***hidden***}"
+          echo "   KEY_ALIAS=${KEY_ALIAS:-not set}"
+          echo "   KEY_PASSWORD=${KEY_PASSWORD:+***hidden***}"
+          
+          # 检查 gradle.properties
+          echo ""
+          echo "📋 gradle.properties signing config:"
+          grep -E "^(KEYSTORE_FILE|KEYSTORE_PASSWORD|KEY_ALIAS|KEY_PASSWORD)=" gradle.properties | sed 's/=.*/=***hidden***/' || echo "   No signing config found in gradle.properties"
+      
       - name: Build APK
         id: build
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
           echo "🔨 Building $BUILD_TYPE APK..."
           
-          # 清理之前的构建
+          # 清理之前的构建（但不清理 keystore 文件）
           ./gradlew clean --no-daemon --console=plain || true
           
           # 根据构建类型选择构建任务
