@@ -6,25 +6,34 @@ on:
   pull_request:
     branches: [ main, develop ]
 
-# 并发控制：同一 PR 的多个推送只运行最新的
-concurrency:
-  group: ci-${{ github.ref }}-${{ github.workflow }}
-  cancel-in-progress: true
-
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     
+    # 并发控制：为每个 Java 版本创建独立的分组
+    concurrency:
+      group: ci-${{ github.ref }}-${{ github.workflow }}-java${{ matrix.java-version }}
+      cancel-in-progress: true
+    
     strategy:
       matrix:
-        java-version: [11, 17]
+        java-version: [17, 21]
+        include:
+          - java-version: 17
+            java-name: "Java 17"
+            java-group: "java17"
+          - java-version: 21
+            java-name: "Java 21"
+            java-group: "java21"
       fail-fast: false  # 一个版本失败不影响其他版本
+    
+    name: Build and Test (${{ matrix.java-name }})
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Set up JDK ${{ matrix.java-version }}
+      - name: Set up JDK ${{ matrix.java-name }}
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -52,7 +61,7 @@ jobs:
       - name: Build and test
         id: build_test
         run: |
-          echo "Building and testing all modules with Java ${{ matrix.java-version }}..."
+          echo "🔨 Building and testing all modules with ${{ matrix.java-name }}..."
           ./gradlew clean build test \
             --parallel \
             --max-workers=4 \
@@ -73,7 +82,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-java-${{ matrix.java-version }}
+          name: test-results-${{ matrix.java-group }}
           path: |
             **/build/test-results/**/*.xml
           retention-days: 7
@@ -83,7 +92,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs-java-${{ matrix.java-version }}
+          name: build-logs-${{ matrix.java-group }}
           path: |
             **/build/**/*.log
           retention-days: 3
@@ -92,7 +101,7 @@ jobs:
       - name: Build summary
         if: always()
         run: |
-          echo "## 📊 CI Summary (Java ${{ matrix.java-version }})" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 CI Summary (${{ matrix.java-name }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
