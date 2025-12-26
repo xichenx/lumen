@@ -13,3 +13,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Keystore files (不要提交签名密钥)
+*.jks
+*.keystore
+app/keystore/
+**/keystore/

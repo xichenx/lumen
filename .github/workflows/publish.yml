@@ -1,18 +1,15 @@
 name: Publish to Maven Central
 
 on:
-  push:
-    tags:
-      - 'v*'  # 当推送以 v 开头的 tag 时触发，如 v1.0.0 或 v1.0.0/develop
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:  # 仅支持手动触发
     inputs:
       version:
-        description: 'Version to publish (e.g., 1.0.0). Leave empty for auto-increment'
+        description: 'Version to publish (e.g., 0.0.1). Leave empty for auto-increment'
         required: false
       auto_increment:
-        description: 'Auto increment patch version (e.g., 1.0.0 -> 1.0.1)'
+        description: 'Auto increment patch version (e.g., 0.0.1 -> 0.0.2)'
         type: boolean
-        default: false
+        default: true
 
 # 并发控制：防止同时运行多个发布任务
 concurrency:
@@ -41,59 +38,55 @@ jobs:
           java-version: '11'
           cache: 'gradle'
       
-      - name: Extract version from tag
-        id: extract_version
-        if: github.event_name == 'push'
+      - name: Get current version and branch
+        id: version_info
         run: |
-          TAG_NAME=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG_NAME#v}
-          VERSION=${VERSION%%/*}
+          # 读取当前组件版本（独立于demo版本）
+          CURRENT_VERSION=$(grep "^LIBRARY_VERSION_NAME=" gradle.properties | cut -d'=' -f2 || grep "^VERSION_NAME=" gradle.properties | cut -d'=' -f2 || echo "")
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
           
-          # 验证版本号格式
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9-]+)?$ ]]; then
-            echo "❌ Invalid version format: $VERSION"
-            echo "Expected format: X.Y.Z or X.Y.Z-SNAPSHOT"
-            exit 1
-          fi
-          
-          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Extracted version: $VERSION from tag: $TAG_NAME"
-      
-      - name: Get current version from gradle.properties
-        id: current_version
-        run: |
-          CURRENT_VERSION=$(grep "^VERSION_NAME=" gradle.properties | cut -d'=' -f2 || echo "0.0.0")
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "Current version in gradle.properties: $CURRENT_VERSION"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "Current library version: $CURRENT_VERSION"
+          echo "Current branch: $BRANCH_NAME"
       
       - name: Determine final version
         id: final_version
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            CURRENT="${{ steps.current_version.outputs.current_version }}"
-            
-            if [ -n "${{ github.event.inputs.version }}" ]; then
-              FINAL_VERSION="${{ github.event.inputs.version }}"
-              echo "Using manually specified version: $FINAL_VERSION"
-            elif [ "${{ github.event.inputs.auto_increment }}" == "true" ]; then
-              FINAL_VERSION=$(echo "$CURRENT" | awk -F. '{printf "%d.%d.%d", $1, $2, $3+1}')
-              echo "Auto-incremented version: $CURRENT -> $FINAL_VERSION"
+          CURRENT="${{ steps.version_info.outputs.current_version }}"
+          BRANCH_NAME="${{ steps.version_info.outputs.branch_name }}"
+          
+          # 根据分支设置版本规则
+          if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
+            # main分支：从0.0.1开始
+            if [ -z "$CURRENT" ] || [ "$CURRENT" == "" ]; then
+              BASE_VERSION="0.0.1"
             else
-              FINAL_VERSION="$CURRENT"
-              echo "Using current version: $FINAL_VERSION"
+              BASE_VERSION="$CURRENT"
+            fi
+          elif [ "$BRANCH_NAME" == "develop" ]; then
+            # develop分支：从1.0.0开始
+            if [ -z "$CURRENT" ] || [ "$CURRENT" == "" ]; then
+              BASE_VERSION="1.0.0"
+            else
+              BASE_VERSION="$CURRENT"
             fi
           else
-            TAG_VERSION="${{ steps.extract_version.outputs.version }}"
-            CURRENT="${{ steps.current_version.outputs.current_version }}"
-            
-            if [ "$TAG_VERSION" == "$CURRENT" ]; then
-              FINAL_VERSION=$(echo "$CURRENT" | awk -F. '{printf "%d.%d.%d", $1, $2, $3+1}')
-              echo "Tag version ($TAG_VERSION) matches current ($CURRENT), auto-incrementing to: $FINAL_VERSION"
-            else
-              FINAL_VERSION="$TAG_VERSION"
-              echo "Using tag version: $FINAL_VERSION (current: $CURRENT)"
-            fi
+            # 其他分支：使用当前版本或默认值
+            BASE_VERSION=${CURRENT:-"0.0.1"}
+          fi
+          
+          # 确定最终版本
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            FINAL_VERSION="${{ github.event.inputs.version }}"
+            echo "Using manually specified version: $FINAL_VERSION"
+          elif [ "${{ github.event.inputs.auto_increment }}" == "true" ]; then
+            # 自动递增最后一位
+            FINAL_VERSION=$(echo "$BASE_VERSION" | awk -F. '{printf "%d.%d.%d", $1, $2, $3+1}')
+            echo "Auto-incremented version: $BASE_VERSION -> $FINAL_VERSION"
+          else
+            FINAL_VERSION="$BASE_VERSION"
+            echo "Using current version: $FINAL_VERSION"
           fi
           
           # 验证最终版本号格式
@@ -103,7 +96,7 @@ jobs:
           fi
           
           echo "final_version=$FINAL_VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Final version to publish: $FINAL_VERSION"
+          echo "✅ Final version to publish: $FINAL_VERSION (branch: $BRANCH_NAME)"
       
       - name: Check if version already exists
         id: check_version
@@ -189,9 +182,16 @@ jobs:
       - name: Update version in gradle.properties
         run: |
           VERSION="${{ needs.pre-check.outputs.version }}"
+          # 更新组件版本（独立于demo版本）
+          if grep -q "^LIBRARY_VERSION_NAME=" gradle.properties; then
+            sed -i "s/^LIBRARY_VERSION_NAME=.*/LIBRARY_VERSION_NAME=$VERSION/" gradle.properties
+          else
+            echo "LIBRARY_VERSION_NAME=$VERSION" >> gradle.properties
+          fi
+          # 同时更新VERSION_NAME以保持兼容
           sed -i "s/^VERSION_NAME=.*/VERSION_NAME=$VERSION/" gradle.properties
-          echo "✅ Updated VERSION_NAME to $VERSION"
-          grep VERSION_NAME gradle.properties
+          echo "✅ Updated LIBRARY_VERSION_NAME and VERSION_NAME to $VERSION"
+          grep -E "^(LIBRARY_VERSION_NAME|VERSION_NAME)=" gradle.properties || true
       
       - name: Setup Gradle
         uses: gradle/gradle-build-action@v2

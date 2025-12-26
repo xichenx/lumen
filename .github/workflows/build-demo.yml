@@ -1,31 +1,7 @@
 name: Build Demo APK
 
 on:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - 'app/**'
-      - 'lumen/**'
-      - 'lumen-core/**'
-      - 'lumen-view/**'
-      - 'lumen-transform/**'
-      - 'build.gradle.kts'
-      - 'gradle/**'
-  pull_request:
-    branches:
-      - main
-      - master
-    paths:
-      - 'app/**'
-      - 'lumen/**'
-      - 'lumen-core/**'
-      - 'lumen-view/**'
-      - 'lumen-transform/**'
-      - 'build.gradle.kts'
-      - 'gradle/**'
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:  # 仅支持手动触发
     inputs:
       build_type:
         description: 'Build type (debug or release)'
@@ -35,11 +11,13 @@ on:
         options:
           - release
           - debug
-      create_release:
-        description: 'Create GitHub Release with APK'
+      version:
+        description: 'App version (e.g., 0.0.1). Leave empty for auto-increment'
         required: false
-        default: false
+      auto_increment:
+        description: 'Auto increment patch version (e.g., 0.0.1 -> 0.0.2)'
         type: boolean
+        default: true
 
 # 并发控制：允许同时运行多个构建任务（不同分支/PR）
 concurrency:
@@ -57,6 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -74,39 +53,176 @@ jobs:
             notifications
             jdks
       
+      - name: Setup signing key (Release builds only)
+        if: github.event.inputs.build_type == 'release'
+        run: |
+          # 从GitHub Secrets读取签名配置
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ] && [ -n "${{ secrets.KEYSTORE_PASSWORD }}" ]; then
+            echo "🔐 Setting up signing configuration for release build..."
+            
+            # 创建keystore目录
+            mkdir -p app/keystore
+            
+            # 从secrets读取keystore文件（base64编码）
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/keystore/lumen-release.jks
+            chmod 600 app/keystore/lumen-release.jks
+            
+            # 验证keystore文件是否创建成功
+            if [ -f app/keystore/lumen-release.jks ]; then
+              echo "✅ Keystore file created successfully"
+              ls -lh app/keystore/lumen-release.jks
+            else
+              echo "❌ Failed to create keystore file"
+              exit 1
+            fi
+            
+            # 设置环境变量（Gradle会自动读取）
+            KEY_ALIAS_VALUE="${{ secrets.KEY_ALIAS }}"
+            KEY_PASSWORD_VALUE="${{ secrets.KEY_PASSWORD }}"
+            
+            # 如果KEY_ALIAS未设置，使用默认值
+            if [ -z "$KEY_ALIAS_VALUE" ]; then
+              KEY_ALIAS_VALUE="lumen-release"
+            fi
+            
+            # 如果KEY_PASSWORD未设置，使用KEYSTORE_PASSWORD
+            if [ -z "$KEY_PASSWORD_VALUE" ]; then
+              KEY_PASSWORD_VALUE="${{ secrets.KEYSTORE_PASSWORD }}"
+            fi
+            
+            echo "KEYSTORE_FILE=app/keystore/lumen-release.jks" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$KEY_ALIAS_VALUE" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$KEY_PASSWORD_VALUE" >> $GITHUB_ENV
+            
+            echo "✅ Signing configuration ready:"
+            echo "   Keystore: app/keystore/lumen-release.jks"
+            echo "   Alias: $KEY_ALIAS_VALUE"
+          else
+            echo "⚠️  Signing credentials not configured in GitHub Secrets"
+            echo "   Release build will be unsigned (can be used for testing)"
+            echo ""
+            echo "📋 To enable signing, configure the following GitHub Secrets:"
+            echo "   1. KEYSTORE_BASE64 - Base64 encoded keystore file (required)"
+            echo "   2. KEYSTORE_PASSWORD - Keystore password (required)"
+            echo "   3. KEY_ALIAS - Key alias (optional, defaults to 'lumen')"
+            echo "   4. KEY_PASSWORD - Key password (optional, defaults to KEYSTORE_PASSWORD)"
+            echo ""
+            echo "💡 See SIGNING_SETUP.md for detailed instructions"
+          fi
+      
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
       
-      - name: Get version info
+      - name: Calculate and update version
         id: version
         run: |
-          VERSION_NAME=$(grep "^VERSION_NAME=" gradle.properties | cut -d'=' -f2 || echo "1.0.0")
-          APP_VERSION=$(grep "versionName" app/build.gradle.kts | head -1 | sed -n 's/.*versionName = "\(.*\)".*/\1/p' || echo "1.0")
-          APP_VERSION_CODE=$(grep "versionCode" app/build.gradle.kts | head -1 | sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' || echo "1")
+          # 获取分支信息
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           
-          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
-          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
-          echo "app_version_code=$APP_VERSION_CODE" >> $GITHUB_OUTPUT
+          # 读取当前版本（去除空格和空值）
+          CURRENT_APP_VERSION=$(grep "^APP_VERSION_NAME=" gradle.properties | cut -d'=' -f2 | xargs || echo "")
+          CURRENT_APP_VERSION_CODE=$(grep "^APP_VERSION_CODE=" gradle.properties | cut -d'=' -f2 | xargs || echo "")
+          
+          # 如果值为空字符串，视为未设置
+          if [ -z "$CURRENT_APP_VERSION" ] || [ "$CURRENT_APP_VERSION" == "" ]; then
+            CURRENT_APP_VERSION=""
+          fi
+          if [ -z "$CURRENT_APP_VERSION_CODE" ] || [ "$CURRENT_APP_VERSION_CODE" == "" ]; then
+            CURRENT_APP_VERSION_CODE=""
+          fi
+          
+          # 根据分支设置版本规则
+          if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
+            # main分支：从0.0.1开始
+            if [ -z "$CURRENT_APP_VERSION" ]; then
+              BASE_VERSION="0.0.1"
+            else
+              BASE_VERSION="$CURRENT_APP_VERSION"
+            fi
+          elif [ "$BRANCH_NAME" == "develop" ]; then
+            # develop分支：从1.0.0开始
+            if [ -z "$CURRENT_APP_VERSION" ]; then
+              BASE_VERSION="1.0.0"
+            else
+              BASE_VERSION="$CURRENT_APP_VERSION"
+            fi
+          else
+            # 其他分支：使用当前版本或默认值
+            BASE_VERSION=${CURRENT_APP_VERSION:-"0.0.1"}
+          fi
+          
+          # 确定最终版本
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            NEW_APP_VERSION="${{ github.event.inputs.version }}"
+            echo "Using manually specified version: $NEW_APP_VERSION"
+          elif [ "${{ github.event.inputs.auto_increment }}" == "true" ]; then
+            # 自动递增最后一位
+            NEW_APP_VERSION=$(echo "$BASE_VERSION" | awk -F. '{printf "%d.%d.%d", $1, $2, $3+1}')
+            echo "Auto-incremented version: $BASE_VERSION -> $NEW_APP_VERSION"
+          else
+            NEW_APP_VERSION="$BASE_VERSION"
+            echo "Using current version: $NEW_APP_VERSION"
+          fi
+          
+          # 验证版本号格式
+          if [[ ! "$NEW_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid version format: $NEW_APP_VERSION"
+            echo "Expected format: X.Y.Z (e.g., 0.0.1)"
+            exit 1
+          fi
+          
+          # 计算版本代码（基于版本号）
+          MAJOR=$(echo "$NEW_APP_VERSION" | cut -d'.' -f1)
+          MINOR=$(echo "$NEW_APP_VERSION" | cut -d'.' -f2)
+          PATCH=$(echo "$NEW_APP_VERSION" | cut -d'.' -f3)
+          # 版本代码 = 主版本*10000 + 次版本*100 + 修订版本
+          NEW_APP_VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          
+          # 更新 gradle.properties
+          if grep -q "^APP_VERSION_NAME=" gradle.properties; then
+            sed -i "s/^APP_VERSION_NAME=.*/APP_VERSION_NAME=$NEW_APP_VERSION/" gradle.properties
+          else
+            echo "APP_VERSION_NAME=$NEW_APP_VERSION" >> gradle.properties
+          fi
+          
+          if grep -q "^APP_VERSION_CODE=" gradle.properties; then
+            sed -i "s/^APP_VERSION_CODE=.*/APP_VERSION_CODE=$NEW_APP_VERSION_CODE/" gradle.properties
+          else
+            echo "APP_VERSION_CODE=$NEW_APP_VERSION_CODE" >> gradle.properties
+          fi
+          
+          # 生成tag名称
+          TAG_NAME="demo-v${NEW_APP_VERSION}"
+          
+          # 输出版本信息
+          echo "app_version=$NEW_APP_VERSION" >> $GITHUB_OUTPUT
+          echo "app_version_code=$NEW_APP_VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "version_name=$NEW_APP_VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           
           # 生成构建信息
           BUILD_DATE=$(date +'%Y%m%d-%H%M%S')
           COMMIT_SHA=$(git rev-parse --short HEAD)
-          BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            BRANCH_NAME="pr-${{ github.event.pull_request.number }}"
-          fi
           
           echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
           echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           echo "build_type=${{ github.event.inputs.build_type || 'release' }}" >> $GITHUB_OUTPUT
           
-          echo "📦 Version Info:"
-          echo "  Library Version: $VERSION_NAME"
-          echo "  App Version: $APP_VERSION ($APP_VERSION_CODE)"
+          echo "✅ Version calculated:"
+          echo "  Branch: $BRANCH_NAME"
+          echo "  Base Version: $BASE_VERSION"
+          echo "  Final Version: $NEW_APP_VERSION (Code: $NEW_APP_VERSION_CODE)"
+          echo "  Tag: $TAG_NAME"
           echo "  Build Date: $BUILD_DATE"
           echo "  Commit: $COMMIT_SHA"
-          echo "  Branch: $BRANCH_NAME"
+          
+          # 显示更新后的配置
+          echo ""
+          echo "📋 Updated gradle.properties:"
+          grep -E "^(APP_VERSION_NAME|APP_VERSION_CODE)=" gradle.properties || true
       
       - name: Build APK
         id: build
@@ -117,6 +233,7 @@ jobs:
           # 清理之前的构建
           ./gradlew clean --no-daemon --console=plain || true
           
+          # 根据构建类型选择构建任务
           if [ "$BUILD_TYPE" == "release" ]; then
             ./gradlew :app:assembleRelease \
               --parallel \
@@ -148,23 +265,32 @@ jobs:
           BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
           
           if [ "$BUILD_TYPE" == "release" ]; then
-            # 优先查找 Lumen.apk，如果不存在则查找任何 .apk 文件
-            APK_PATH=$(find app/build/outputs/apk/release -name "Lumen.apk" | head -1)
+            # 查找release APK（支持 AGP 8.0+ 新路径和传统路径）
+            # 优先查找重命名后的 Lumen.apk
+            APK_PATH=$(find app/release app/build/outputs/apk/release -name "Lumen.apk" 2>/dev/null | head -1)
+            # 如果没找到，查找任何 APK 文件
             if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
-              APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+              APK_PATH=$(find app/release app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -1)
             fi
+            SEARCH_DIRS="app/release or app/build/outputs/apk/release"
           else
-            # 优先查找 Lumen-debug.apk，如果不存在则查找任何 .apk 文件
-            APK_PATH=$(find app/build/outputs/apk/debug -name "Lumen-debug.apk" | head -1)
+            # 查找debug APK（支持 AGP 8.0+ 新路径和传统路径）
+            # 优先查找重命名后的 Lumen-debug.apk
+            APK_PATH=$(find app/debug app/build/outputs/apk/debug -name "Lumen-debug.apk" 2>/dev/null | head -1)
+            # 如果没找到，查找任何 APK 文件
             if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
-              APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+              APK_PATH=$(find app/debug app/build/outputs/apk/debug -name "*.apk" 2>/dev/null | head -1)
             fi
+            SEARCH_DIRS="app/debug or app/build/outputs/apk/debug"
           fi
           
           if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
             echo "❌ APK not found!"
-            echo "Searched in: app/build/outputs/apk/$BUILD_TYPE"
-            ls -la app/build/outputs/apk/$BUILD_TYPE/ || true
+            echo "Searched in: $SEARCH_DIRS"
+            echo "Checking app/release:"
+            ls -la app/release 2>/dev/null || echo "  Directory does not exist"
+            echo "Checking app/build/outputs/apk/release:"
+            ls -la app/build/outputs/apk/release 2>/dev/null || echo "  Directory does not exist"
             exit 1
           fi
           
@@ -176,6 +302,7 @@ jobs:
           echo "apk_size=$APK_SIZE" >> $GITHUB_OUTPUT
           
           echo "✅ Found APK: $APK_NAME ($APK_SIZE)"
+          echo "   Location: $APK_PATH"
           ls -lh "$APK_PATH"
       
       - name: Get APK info
@@ -196,35 +323,72 @@ jobs:
             echo "⚠️  aapt not available, skipping APK info extraction"
           fi
       
+      - name: Commit version and create tag
+        if: |
+          steps.build.outputs.build_success == 'true' &&
+          github.event.inputs.build_type == 'release'
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.app_version }}"
+          TAG_NAME="${{ steps.version.outputs.tag_name }}"
+          BRANCH_NAME="${{ steps.version.outputs.branch_name }}"
+          
+          # 配置 git 用户信息
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # 检查是否有版本变更
+          if ! git diff --quiet gradle.properties; then
+            echo "📝 Committing version update to $BRANCH_NAME branch"
+            git add gradle.properties
+            git commit -m "chore: bump demo version to $NEW_VERSION [skip ci]"
+            
+            # 推送到当前分支
+            git push origin HEAD:$BRANCH_NAME || {
+              echo "⚠️  Failed to push version update, but build will continue"
+            }
+          else
+            echo "ℹ️  No version change detected, skipping commit"
+          fi
+          
+          # 创建并推送tag（仅release包创建tag）
+          if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "🏷️  Creating tag: $TAG_NAME"
+            git tag -a "$TAG_NAME" -m "Demo APK v$NEW_VERSION"
+            git push origin "$TAG_NAME" || {
+              echo "⚠️  Failed to push tag, but build will continue"
+            }
+          else
+            echo "ℹ️  Tag $TAG_NAME already exists, skipping tag creation"
+          fi
+      
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: demo-apk-${{ steps.version.outputs.build_type }}-${{ steps.version.outputs.build_date }}
+          name: demo-apk-${{ steps.version.outputs.app_version }}-${{ steps.version.outputs.build_date }}
           path: ${{ steps.find_apk.outputs.apk_path }}
           retention-days: 30
           compression-level: 6
       
       - name: Create GitHub Release
         if: |
-          github.event_name == 'workflow_dispatch' && 
-          github.event.inputs.create_release == 'true' &&
-          steps.build.outputs.build_success == 'true'
+          steps.build.outputs.build_success == 'true' &&
+          github.event.inputs.build_type == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: demo-v${{ steps.version.outputs.app_version }}-${{ steps.version.outputs.build_date }}
-          name: Demo APK v${{ steps.version.outputs.app_version }} (${{ steps.version.outputs.build_date }})
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: Demo APK ${{ steps.version.outputs.app_version }}
           body: |
             ## 📱 Demo APK Release
             
             ### 📦 Build Information
             
-            - **Library Version**: `${{ steps.version.outputs.version_name }}`
             - **App Version**: `${{ steps.version.outputs.app_version }}` (Code: `${{ steps.version.outputs.app_version_code }}`)
             - **Build Type**: `${{ github.event.inputs.build_type || 'release' }}`
             - **Build Date**: `${{ steps.version.outputs.build_date }}`
             - **Commit**: `${{ steps.version.outputs.commit_sha }}`
             - **Branch**: `${{ steps.version.outputs.branch_name }}`
             - **APK Size**: `${{ steps.find_apk.outputs.apk_size }}`
+            - **Tag**: `${{ steps.version.outputs.tag_name }}`
             
             ### 📥 Installation
             

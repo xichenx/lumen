@@ -6,7 +6,10 @@ plugins {
 }
 
 // 统一版本管理
-val versionName: String = project.findProperty("VERSION_NAME") as String? ?: "1.0.0"
+// 优先使用LIBRARY_VERSION_NAME（组件版本），如果没有则使用VERSION_NAME
+val versionName: String = project.findProperty("LIBRARY_VERSION_NAME") as String?
+    ?: project.findProperty("VERSION_NAME") as String?
+    ?: "1.0.0"
 
 // 为所有子项目应用版本
 subprojects {
