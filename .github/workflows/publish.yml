@@ -366,12 +366,15 @@ jobs:
           if [ -f secret.gpg ] && [ -s secret.gpg ] && grep -q "BEGIN PGP PRIVATE KEY BLOCK" secret.gpg; then
             echo "✅ GPG key successfully exported to secret.gpg"
             echo "   File size: $(wc -c < secret.gpg) bytes"
-            echo "   File location: $(pwd)/secret.gpg"
-            echo "   File absolute path: $(realpath secret.gpg 2>/dev/null || pwd)/secret.gpg"
+            SECRET_GPG_PATH="$(pwd)/secret.gpg"
+            echo "   File location: $SECRET_GPG_PATH"
+            echo "   File absolute path: $(realpath secret.gpg 2>/dev/null || echo "$SECRET_GPG_PATH")"
             # 确保文件权限正确
             chmod 600 secret.gpg
             # 将文件路径保存到环境变量，供后续步骤使用
-            echo "GPG_KEY_FILE=$(pwd)/secret.gpg" >> $GITHUB_ENV
+            echo "GPG_KEY_FILE=$SECRET_GPG_PATH" >> $GITHUB_ENV
+            # 同时保存到输出，用于调试
+            echo "gpg_key_file=$SECRET_GPG_PATH" >> $GITHUB_OUTPUT
           else
             echo "❌ Failed to export GPG key after all methods"
             echo "   This will cause signing to fail"

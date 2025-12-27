@@ -74,32 +74,34 @@ tasks.register("cleanPublishArtifacts") {
 }
 
 // 创建发布所有模块的聚合任务
-tasks.register("publishAllToMavenCentral") {
-    group = "publishing"
-    description = "Publish all modules to Maven Central with optimized parallel execution"
-    
-    // 发布前验证
-    dependsOn("validatePublishConfiguration")
-    
-    // 依赖所有发布任务
-    // Gradle 会根据项目依赖关系自动处理执行顺序
-    dependsOn(
-        ":lumen-core:publishReleasePublicationToMavenCentralRepository",
-        ":lumen-transform:publishReleasePublicationToMavenCentralRepository",
-        ":lumen-view:publishReleasePublicationToMavenCentralRepository",
-        ":lumen:publishReleasePublicationToMavenCentralRepository"
-    )
-    
-    // 明确指定执行顺序，确保依赖关系
-    // 注意：这些约束只在并行执行时生效
-    // 使用 afterEvaluate 确保任务已经创建
-    afterEvaluate {
-        try {
-            val publishCore = tasks.findByPath(":lumen-core:publishReleasePublicationToMavenCentralRepository")
-            val publishTransform = tasks.findByPath(":lumen-transform:publishReleasePublicationToMavenCentralRepository")
-            val publishView = tasks.findByPath(":lumen-view:publishReleasePublicationToMavenCentralRepository")
-            val publishLumen = tasks.findByPath(":lumen:publishReleasePublicationToMavenCentralRepository")
+// 注意：必须在 afterEvaluate 中配置，因为发布任务是在子项目的 afterEvaluate 中创建的
+afterEvaluate {
+    tasks.register("publishAllToMavenCentral") {
+        group = "publishing"
+        description = "Publish all modules to Maven Central with optimized parallel execution"
+        
+        // 发布前验证
+        dependsOn("validatePublishConfiguration")
+        
+        // 查找所有发布任务（使用延迟查找）
+        val publishCore = tasks.findByPath(":lumen-core:publishReleasePublicationToMavenCentralRepository")
+        val publishTransform = tasks.findByPath(":lumen-transform:publishReleasePublicationToMavenCentralRepository")
+        val publishView = tasks.findByPath(":lumen-view:publishReleasePublicationToMavenCentralRepository")
+        val publishLumen = tasks.findByPath(":lumen:publishReleasePublicationToMavenCentralRepository")
+        
+        // 只依赖存在的任务
+        val publishTasks = listOfNotNull(publishCore, publishTransform, publishView, publishLumen)
+        
+        if (publishTasks.isEmpty()) {
+            logger.warn("⚠️  No publish tasks found. Make sure publish configuration is correct.")
+            doLast {
+                logger.warn("⚠️  No modules to publish. Check publish configuration.")
+            }
+        } else {
+            // 依赖所有找到的发布任务
+            dependsOn(publishTasks)
             
+            // 明确指定执行顺序，确保依赖关系
             if (publishCore != null && publishTransform != null) {
                 // lumen-transform 必须在 lumen-core 之后
                 publishTransform.mustRunAfter(publishCore)
@@ -114,18 +116,16 @@ tasks.register("publishAllToMavenCentral") {
                 // lumen 聚合模块必须在所有子模块之后
                 publishLumen.mustRunAfter(publishCore, publishTransform, publishView)
             }
-        } catch (e: Exception) {
-            logger.warn("Failed to configure publish task dependencies: ${e.message}")
+            
+            doLast {
+                val versionName = project.findProperty("VERSION_NAME") as String? ?: "1.0.0"
+                println("✅ All modules published to Maven Central (version: $versionName)")
+                println("📋 Next steps:")
+                println("   1. Check Sonatype Staging Repository")
+                println("   2. Close and release the staging repository")
+                println("   3. Wait for sync to Maven Central")
+            }
         }
-    }
-    
-    doLast {
-        val versionName = project.findProperty("VERSION_NAME") as String? ?: "1.0.0"
-        println("✅ All modules published to Maven Central (version: $versionName)")
-        println("📋 Next steps:")
-        println("   1. Check Sonatype Staging Repository")
-        println("   2. Close and release the staging repository")
-        println("   3. Wait for sync to Maven Central")
     }
 }
 
