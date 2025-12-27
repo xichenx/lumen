@@ -1,20 +1,29 @@
-name: Publish to Maven Central
+name: Publish Library
 
 on:
-  workflow_dispatch:  # 仅支持手动触发
+  workflow_dispatch:  # 手动触发
     inputs:
       version:
-        description: 'Version to publish (e.g., 0.0.1). Leave empty for auto-increment'
+        description: 'Version to publish (e.g., 1.0.0). Leave empty for auto-increment'
         required: false
       auto_increment:
-        description: 'Auto increment patch version (e.g., 0.0.1 -> 0.0.2)'
+        description: 'Auto increment patch version (e.g., 1.0.0 -> 1.0.1)'
         type: boolean
         default: true
+      publish_to:
+        description: 'Where to publish'
+        type: choice
+        required: true
+        default: 'both'
+        options:
+          - both
+          - maven-central
+          - jitpack
 
 # 并发控制：防止同时运行多个发布任务
 concurrency:
-  group: publish-to-maven-central
-  cancel-in-progress: false  # 不取消正在进行的发布
+  group: publish-library
+  cancel-in-progress: false
 
 jobs:
   # 预检查任务：验证版本号和配置
@@ -58,21 +67,18 @@ jobs:
           
           # 根据分支设置版本规则
           if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
-            # main分支：从0.0.1开始
             if [ -z "$CURRENT" ] || [ "$CURRENT" == "" ]; then
               BASE_VERSION="0.0.1"
             else
               BASE_VERSION="$CURRENT"
             fi
           elif [ "$BRANCH_NAME" == "develop" ]; then
-            # develop分支：从1.0.0开始
             if [ -z "$CURRENT" ] || [ "$CURRENT" == "" ]; then
               BASE_VERSION="1.0.0"
             else
               BASE_VERSION="$CURRENT"
             fi
           else
-            # 其他分支：使用当前版本或默认值
             BASE_VERSION=${CURRENT:-"0.0.1"}
           fi
           
@@ -100,6 +106,7 @@ jobs:
       
       - name: Check if version already exists
         id: check_version
+        if: github.event.inputs.publish_to == 'maven-central' || github.event.inputs.publish_to == 'both'
         run: |
           VERSION="${{ steps.final_version.outputs.final_version }}"
           GROUP_ID="io.github.xichenx"
@@ -107,16 +114,12 @@ jobs:
           
           echo "Checking if version $VERSION already exists in Maven Central..."
           
-          # 检查 Maven Central 是否已存在该版本
           URL="https://repo1.maven.org/maven2/${GROUP_ID//./\/}/$ARTIFACT_ID/$VERSION/"
-          
-          # 使用超时和重试机制检查版本
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --retry 2 "$URL" || echo "000")
           
           if [ "$HTTP_CODE" = "200" ]; then
             echo "⚠️  Version $VERSION already exists in Maven Central!"
             echo "should_publish=false" >> $GITHUB_OUTPUT
-            echo "existing_url=$URL" >> $GITHUB_OUTPUT
           elif [ "$HTTP_CODE" = "000" ]; then
             echo "⚠️  Failed to check Maven Central (network error), proceeding with publish"
             echo "should_publish=true" >> $GITHUB_OUTPUT
@@ -125,7 +128,16 @@ jobs:
             echo "should_publish=true" >> $GITHUB_OUTPUT
           fi
       
+      - name: Check version for JitPack
+        id: check_jitpack
+        if: github.event.inputs.publish_to == 'jitpack' || github.event.inputs.publish_to == 'both'
+        run: |
+          VERSION="${{ steps.final_version.outputs.final_version }}"
+          echo "✅ JitPack will build version $VERSION when tag is created"
+          echo "should_publish=true" >> $GITHUB_OUTPUT
+      
       - name: Validate secrets
+        if: github.event.inputs.publish_to == 'maven-central' || github.event.inputs.publish_to == 'both'
         run: |
           MISSING_SECRETS=()
           
@@ -147,11 +159,12 @@ jobs:
           
           if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
             echo "⚠️  Missing secrets: ${MISSING_SECRETS[*]}"
-            echo "Publish will be skipped, but artifacts will be built"
+            echo "Maven Central publish will be skipped"
           else
             echo "✅ All required secrets are configured"
           fi
 
+  # 发布任务
   publish:
     runs-on: ubuntu-latest
     needs: pre-check
@@ -182,7 +195,7 @@ jobs:
       - name: Update version in gradle.properties
         run: |
           VERSION="${{ needs.pre-check.outputs.version }}"
-          # 更新组件版本（独立于demo版本）
+          # 更新组件版本（确保 JitPack 和 Maven Central 使用相同版本）
           if grep -q "^LIBRARY_VERSION_NAME=" gradle.properties; then
             sed -i "s/^LIBRARY_VERSION_NAME=.*/LIBRARY_VERSION_NAME=$VERSION/" gradle.properties
           else
@@ -191,25 +204,16 @@ jobs:
           # 同时更新VERSION_NAME以保持兼容
           sed -i "s/^VERSION_NAME=.*/VERSION_NAME=$VERSION/" gradle.properties
           echo "✅ Updated LIBRARY_VERSION_NAME and VERSION_NAME to $VERSION"
+          echo "📋 This version will be used for both JitPack and Maven Central"
           grep -E "^(LIBRARY_VERSION_NAME|VERSION_NAME)=" gradle.properties || true
       
       - name: Setup Gradle
         uses: gradle/gradle-build-action@v2
         with:
           cache-read-only: false
-          gradle-home-cache-includes: |
-            caches
-            notifications
-            jdks
       
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
-      
-      - name: Validate Gradle configuration
-        run: |
-          echo "Validating Gradle configuration..."
-          ./gradlew tasks --all --console=plain | head -20
-          echo "✅ Gradle configuration is valid"
       
       - name: Build and test
         id: build
@@ -227,45 +231,28 @@ jobs:
             echo "✅ Build and test completed successfully"
           else
             echo "build_success=false" >> $GITHUB_OUTPUT
-            echo "❌ Build or test failed"
             exit 1
           fi
       
-      - name: Setup GPG
+      # Maven Central 发布步骤
+      - name: Setup GPG for Maven Central
+        if: github.event.inputs.publish_to == 'maven-central' || github.event.inputs.publish_to == 'both'
         id: gpg_setup
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           if [ -z "$GPG_PRIVATE_KEY" ] || [ -z "$GPG_PASSPHRASE" ]; then
-            echo "⚠️  GPG credentials not configured, signing will be skipped"
+            echo "⚠️  GPG credentials not configured"
             echo "gpg_configured=false" >> $GITHUB_OUTPUT
-            echo "GPG_KEY_ID=" >> $GITHUB_ENV
             exit 0
           fi
           
           echo "Setting up GPG signing..."
           
-          # 检测密钥格式并导入 GPG 密钥
-          # 支持两种格式：
-          # 1. ASCII armor 格式（包含 -----BEGIN PGP PRIVATE KEY BLOCK-----）
-          # 2. Base64 编码格式（需要解码）
-          
-          # 使用 grep -F 进行固定字符串匹配，避免将 - 解释为选项
-          # 或者使用 echo + grep 的组合来避免选项解析问题
           if echo "$GPG_PRIVATE_KEY" | grep -F -- "-----BEGIN PGP" > /dev/null 2>&1; then
-            # ASCII armor 格式，直接导入
-            echo "📋 Detected ASCII armor format GPG key"
-            echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import 2>&1 || {
-              echo "❌ Failed to import GPG key (ASCII armor format)"
-              echo "   Debug: Checking key format..."
-              echo "$GPG_PRIVATE_KEY" | head -5
-              exit 1
-            }
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import 2>&1
           else
-            # Base64 编码格式，需要解码
-            echo "📋 Detected Base64 encoded GPG key"
-            # 清理可能的头部/尾部标记和空行（类似 keystore 的处理）
             CLEANED_KEY=$(echo "$GPG_PRIVATE_KEY" | \
               sed -e '/-----BEGIN CERTIFICATE-----/d' \
                   -e '/-----END CERTIFICATE-----/d' \
@@ -275,137 +262,38 @@ jobs:
                   -e '/-----END PGP PUBLIC KEY BLOCK-----/d' \
                   -e '/^$/d' | \
               tr -d '\n\r ')
-            
-            # 尝试 base64 解码
-            if echo "$CLEANED_KEY" | base64 -d 2>/dev/null | gpg --batch --yes --import 2>&1; then
-              echo "✅ GPG key imported successfully (Base64 format)"
-            else
-              echo "❌ Failed to import GPG key (Base64 format)"
-              echo "   Make sure GPG_PRIVATE_KEY is properly base64 encoded"
-              echo "   Or use ASCII armor format (with -----BEGIN PGP PRIVATE KEY BLOCK-----)"
-              echo ""
-              echo "   Debug info:"
-              echo "   - Key length: ${#CLEANED_KEY} characters"
-              echo "   - First 50 chars: ${CLEANED_KEY:0:50}..."
-              exit 1
-            fi
+            echo "$CLEANED_KEY" | base64 -d 2>/dev/null | gpg --batch --yes --import 2>&1
           fi
           
-          # 提取密钥 ID（长格式）
           KEY_ID_LONG=$(gpg --list-secret-keys --keyid-format LONG 2>/dev/null | grep -E "^(sec|SEC)" | head -1 | awk '{print $2}' | cut -d'/' -f2)
-          
-          if [ -z "$KEY_ID_LONG" ]; then
-            echo "❌ Failed to extract GPG key ID"
-            echo "   Listing available keys for debugging:"
-            gpg --list-secret-keys --keyid-format LONG 2>/dev/null || true
-            exit 1
-          fi
-          
-          # Gradle 签名插件需要短格式（8位十六进制）
-          # 提取短格式（最后8位，去掉可能的换行符）
           KEY_ID_SHORT=$(echo "$KEY_ID_LONG" | tail -c 9 | tr -d '\n\r ')
           
-          # 验证短格式密钥 ID（应该是8位十六进制）
           if [ ${#KEY_ID_SHORT} -ne 8 ]; then
-            echo "⚠️  Short key ID length is ${#KEY_ID_SHORT}, expected 8"
-            # 如果提取失败，尝试从长格式中提取最后8位
             KEY_ID_SHORT=$(echo "$KEY_ID_LONG" | grep -oE "[0-9A-Fa-f]{8}$" | tail -1)
           fi
           
-          if [ -z "$KEY_ID_SHORT" ] || [ ${#KEY_ID_SHORT} -ne 8 ]; then
-            echo "❌ Failed to extract short GPG key ID"
-            echo "   Long key ID: $KEY_ID_LONG"
-            exit 1
-          fi
-          
-          # Gradle 使用短格式（8位）
           echo "GPG_KEY_ID=$KEY_ID_SHORT" >> $GITHUB_ENV
-          echo "GPG_KEY_ID_LONG=$KEY_ID_LONG" >> $GITHUB_ENV
           echo "gpg_configured=true" >> $GITHUB_OUTPUT
-          echo "✅ GPG Key ID (Long): $KEY_ID_LONG"
-          echo "✅ GPG Key ID (Short for Gradle): $KEY_ID_SHORT"
           
-          # 配置 GPG 以在非交互式环境中工作
           mkdir -p ~/.gnupg
           echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
-          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf 2>/dev/null || echo "allow-loopback-pinentry" > ~/.gnupg/gpg-agent.conf
-          
-          # 重启 gpg-agent 以应用配置
+          echo "allow-loopback-pinentry" > ~/.gnupg/gpg-agent.conf
           gpgconf --kill gpg-agent 2>/dev/null || true
           
-          # 导出密钥文件用于 Gradle 签名
-          # 方法1: 使用 --pinentry-mode loopback 和 --passphrase-fd
-          echo "📤 Exporting GPG key..."
-          echo "   Using key ID: $KEY_ID_LONG"
-          if echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID_LONG" > secret.gpg 2>&1; then
-            # 验证导出的文件
-            if [ -f secret.gpg ] && [ -s secret.gpg ] && grep -q "BEGIN PGP PRIVATE KEY BLOCK" secret.gpg; then
-              echo "✅ GPG key exported successfully to secret.gpg"
-            else
-              echo "⚠️  Exported file seems invalid, trying method 2..."
-              rm -f secret.gpg
-            fi
-          else
-            echo "⚠️  Method 1 failed, trying method 2..."
-            rm -f secret.gpg
-          fi
+          echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID_LONG" > secret.gpg 2>&1
           
-          # 方法2: 如果方法1失败，尝试使用环境变量
-          if [ ! -f secret.gpg ] || [ ! -s secret.gpg ]; then
-            echo "📤 Trying alternative export method..."
-            GPG_TTY=$(tty) || GPG_TTY=/dev/tty
-            export GPG_TTY
-            echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID_LONG" > secret.gpg 2>&1 || {
-              echo "⚠️  Method 2 also failed, trying method 3..."
-              rm -f secret.gpg
-            }
-          fi
-          
-          # 方法3: 如果前两种方法都失败，尝试重新导入并导出
-          if [ ! -f secret.gpg ] || [ ! -s secret.gpg ]; then
-            echo "📤 Trying method 3: re-import and export..."
-            # 重新导入密钥（确保在正确的环境中）
-            if echo "$GPG_PRIVATE_KEY" | grep -F -- "-----BEGIN PGP" > /dev/null 2>&1; then
-              echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import 2>&1
-            else
-              CLEANED_KEY=$(echo "$GPG_PRIVATE_KEY" | \
-                sed -e '/-----BEGIN CERTIFICATE-----/d' \
-                    -e '/-----END CERTIFICATE-----/d' \
-                    -e '/-----BEGIN PGP PRIVATE KEY BLOCK-----/d' \
-                    -e '/-----END PGP PRIVATE KEY BLOCK-----/d' \
-                    -e '/-----BEGIN PGP PUBLIC KEY BLOCK-----/d' \
-                    -e '/-----END PGP PUBLIC KEY BLOCK-----/d' \
-                    -e '/^$/d' | \
-                tr -d '\n\r ')
-              echo "$CLEANED_KEY" | base64 -d 2>/dev/null | gpg --batch --yes --import 2>&1
-            fi
-            # 再次尝试导出
-            echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID_LONG" > secret.gpg 2>&1 || true
-          fi
-          
-          # 最终验证
           if [ -f secret.gpg ] && [ -s secret.gpg ] && grep -q "BEGIN PGP PRIVATE KEY BLOCK" secret.gpg; then
-            echo "✅ GPG key successfully exported to secret.gpg"
-            echo "   File size: $(wc -c < secret.gpg) bytes"
-            SECRET_GPG_PATH="$(pwd)/secret.gpg"
-            echo "   File location: $SECRET_GPG_PATH"
-            echo "   File absolute path: $(realpath secret.gpg 2>/dev/null || echo "$SECRET_GPG_PATH")"
-            # 确保文件权限正确
             chmod 600 secret.gpg
-            # 将文件路径保存到环境变量，供后续步骤使用
-            echo "GPG_KEY_FILE=$SECRET_GPG_PATH" >> $GITHUB_ENV
-            # 同时保存到输出，用于调试
-            echo "gpg_key_file=$SECRET_GPG_PATH" >> $GITHUB_OUTPUT
+            echo "GPG_KEY_FILE=$(pwd)/secret.gpg" >> $GITHUB_ENV
+            echo "✅ GPG key exported successfully"
           else
-            echo "❌ Failed to export GPG key after all methods"
-            echo "   This will cause signing to fail"
-            echo "   Debug: Listing keys in keyring"
-            gpg --list-secret-keys --keyid-format LONG 2>&1 || true
+            echo "❌ Failed to export GPG key"
             exit 1
           fi
       
       - name: Publish to Maven Central
-        id: publish
+        if: (github.event.inputs.publish_to == 'maven-central' || github.event.inputs.publish_to == 'both') && steps.gpg_setup.outputs.gpg_configured == 'true'
+        id: publish_maven
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
@@ -415,116 +303,13 @@ jobs:
         run: |
           VERSION="${{ needs.pre-check.outputs.version }}"
           
-          # 确定 secret.gpg 文件路径
-          GPG_KEY_FILE="${SIGNING_SECRET_KEY_RING_FILE:-secret.gpg}"
-          
-          # 验证 secret.gpg 文件是否存在
-          if [ ! -f "$GPG_KEY_FILE" ] || [ ! -s "$GPG_KEY_FILE" ]; then
-            echo "❌ secret.gpg file not found or empty"
-            echo "   Looking for: $GPG_KEY_FILE"
-            echo "   Current directory: $(pwd)"
-            echo "   Files in current directory:"
-            ls -la | head -20
-            echo "   Looking for secret.gpg..."
-            find . -name "secret.gpg" 2>/dev/null || echo "   secret.gpg not found"
-            # 尝试从环境变量获取路径
-            if [ -n "${{ env.GPG_KEY_FILE }}" ]; then
-              echo "   Trying path from env: ${{ env.GPG_KEY_FILE }}"
-              if [ -f "${{ env.GPG_KEY_FILE }}" ]; then
-                GPG_KEY_FILE="${{ env.GPG_KEY_FILE }}"
-                echo "✅ Found secret.gpg at: $GPG_KEY_FILE"
-              fi
-            fi
-            if [ ! -f "$GPG_KEY_FILE" ]; then
-              exit 1
-            fi
-          fi
-          
-          echo "✅ secret.gpg file found: $(ls -lh "$GPG_KEY_FILE")"
-          echo "   Using file: $GPG_KEY_FILE"
-          # 更新环境变量以使用正确的路径
-          export SIGNING_SECRET_KEY_RING_FILE="$GPG_KEY_FILE"
-          
           if [ -z "$SONATYPE_USERNAME" ] || [ -z "$SONATYPE_PASSWORD" ]; then
             echo "⚠️  Sonatype credentials not configured, skipping Maven Central publish"
-            echo "Building artifacts for manual upload..."
-            ./gradlew publishAllToMavenLocal \
-                      --parallel \
-                      --max-workers=4 \
-                      --no-daemon \
-                      --stacktrace
-            echo "publish_success=false" >> $GITHUB_OUTPUT
-            echo "publish_skipped=true" >> $GITHUB_OUTPUT
+            echo "publish_maven_success=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # 验证凭据（不打印实际值）
-          echo "🔐 Verifying Central Publishing Portal credentials..."
-          USERNAME_LEN=${#SONATYPE_USERNAME}
-          TOKEN_LEN=${#SONATYPE_PASSWORD}
-          echo "   Username: ${SONATYPE_USERNAME:0:3}*** (length: $USERNAME_LEN)"
-          echo "   Central Token: $(printf '*%.0s' $(seq 1 $TOKEN_LEN)) (length: $TOKEN_LEN)"
-          echo "   Group ID: io.github.xichenx (must be lowercase, matching Central Portal namespace)"
-          echo ""
-          echo "📋 Using Central Publishing Portal (OSSRH will end on 2025-06-30)"
-          echo "💡 Note: Variable names SONATYPE_USERNAME and SONATYPE_PASSWORD are kept for compatibility"
-          echo "   - SONATYPE_USERNAME: Your Central Portal username"
-          echo "   - SONATYPE_PASSWORD: Your Central Portal Token (variable name says 'PASSWORD' but use Token!)"
-          echo ""
-          echo "⚠️  If you get 401 errors, check:"
-          echo "   1. SONATYPE_USERNAME: Your Central Portal username (short username, usually 4-8 chars)"
-          echo "   2. SONATYPE_PASSWORD: Your Central Portal Token (not password! Token is usually 30+ chars)"
-          echo "   3. Get your Token from: https://central.sonatype.com/ → Profile → User Token"
-          echo "   4. Your namespace 'io.github.xichenx' must be registered and verified in Central Portal"
-          echo "   5. Token format: Should be a long string (30+ characters), no spaces or line breaks"
-          echo "   6. Username format: Should be your short Central Portal username (not email)"
-          echo ""
-          echo "🔍 Debugging info:"
-          echo "   - Username length: $USERNAME_LEN (expected: 4-8)"
-          echo "   - Token length: $TOKEN_LEN (expected: 30+)"
-          if [ $TOKEN_LEN -lt 20 ]; then
-            echo "   ⚠️  WARNING: Token seems too short! Central Tokens are usually 30+ characters"
-          fi
-          if [ $USERNAME_LEN -gt 20 ]; then
-            echo "   ⚠️  WARNING: Username seems too long! Should be short username (4-8 chars)"
-          fi
-          echo ""
-          
           echo "🚀 Publishing version $VERSION to Maven Central..."
-          echo "📦 Publishing modules: lumen-core, lumen-view, lumen-transform, lumen"
-          echo "⚡ Using optimized parallel publishing with dependency management..."
-          
-          # 先列出可用的发布任务（用于调试）
-          echo "📋 Available publish tasks:"
-          ./gradlew tasks --all --group=publishing 2>&1 | grep -i "publish" || true
-          
-          # 使用聚合任务 + 并行执行优化
-          # 注意：使用 --dry-run 先验证任务是否存在
-          if ./gradlew publishAllToMavenCentral --dry-run --no-daemon 2>&1 | grep -q "publishAllToMavenCentral"; then
-            echo "✅ Task publishAllToMavenCentral found, proceeding with publish..."
-          else
-            echo "⚠️  Task publishAllToMavenCentral not found, trying individual tasks..."
-            # 如果聚合任务不存在，尝试单独发布每个模块
-            ./gradlew \
-              :lumen-core:publishReleasePublicationToMavenCentralRepository \
-              :lumen-transform:publishReleasePublicationToMavenCentralRepository \
-              :lumen-view:publishReleasePublicationToMavenCentralRepository \
-              :lumen:publishReleasePublicationToMavenCentralRepository \
-              --parallel \
-              --max-workers=4 \
-              --no-daemon \
-              --stacktrace \
-              --console=plain
-            if [ $? -eq 0 ]; then
-              echo "✅ Published successfully to Maven Central!"
-              echo "publish_success=true" >> $GITHUB_OUTPUT
-              echo "publish_skipped=false" >> $GITHUB_OUTPUT
-              exit 0
-            else
-              echo "❌ Failed to publish"
-              exit 1
-            fi
-          fi
           
           if ./gradlew publishAllToMavenCentral \
                       --parallel \
@@ -533,111 +318,80 @@ jobs:
                       --stacktrace \
                       --console=plain; then
             echo "✅ Published successfully to Maven Central!"
-            echo "publish_success=true" >> $GITHUB_OUTPUT
-            echo "publish_skipped=false" >> $GITHUB_OUTPUT
-            
-            echo ""
-            echo "📋 Next steps:"
-            echo "1. Login to https://s01.oss.sonatype.org"
-            echo "2. Go to Staging Repositories"
-            echo "3. Find your repository and click Close"
-            echo "4. Wait for validation, then click Release"
-            echo "5. Wait for sync to Maven Central (usually a few hours)"
+            echo "publish_maven_success=true" >> $GITHUB_OUTPUT
           else
             echo "❌ Failed to publish to Maven Central"
-            echo "publish_success=false" >> $GITHUB_OUTPUT
-            echo "publish_skipped=false" >> $GITHUB_OUTPUT
+            echo "publish_maven_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
       
-      - name: Verify published artifacts
-        if: steps.publish.outputs.publish_success == 'true'
+      # JitPack 发布步骤（创建 tag 触发 JitPack 构建）
+      - name: Create tag for JitPack
+        if: github.event.inputs.publish_to == 'jitpack' || github.event.inputs.publish_to == 'both'
+        id: create_tag
         run: |
           VERSION="${{ needs.pre-check.outputs.version }}"
-          GROUP_ID="io.github.xichenx"
-          MODULES=("lumen-core" "lumen-transform" "lumen-view" "lumen")
+          TAG_NAME="v$VERSION"
           
-          echo "🔍 Verifying published artifacts..."
-          
-          # 等待 Sonatype 处理
-          echo "⏳ Waiting for Sonatype to process artifacts (10 seconds)..."
-          sleep 10
-          
-          STAGING_URL="https://s01.oss.sonatype.org/service/local/staging/repository"
-          FAILED_MODULES=()
-          
-          for MODULE in "${MODULES[@]}"; do
-            echo "Checking $MODULE..."
-            # 检查 staging 仓库（这里只是基本检查，实际验证需要登录 Sonatype）
-            echo "  ✅ $MODULE artifacts should be in staging repository"
-          done
-          
-          echo "✅ All modules published to staging repository"
-          echo "⚠️  Note: Final verification requires manual check in Sonatype Nexus"
+          # 检查 tag 是否已存在
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️  Tag $TAG_NAME already exists"
+            echo "tag_created=false" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          else
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git tag -a "$TAG_NAME" -m "Release v$VERSION"
+            git push origin "$TAG_NAME"
+            echo "✅ Created and pushed tag $TAG_NAME"
+            echo "tag_created=true" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          fi
       
-      - name: Upload artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: maven-artifacts-${{ needs.pre-check.outputs.version }}
-          path: |
-            **/build/publications/**/*.pom
-            **/build/publications/**/*.aar
-            **/build/publications/**/*.jar
-            **/build/publications/**/*.asc
-          retention-days: 30
-          compression-level: 6
+      - name: Notify JitPack
+        if: github.event.inputs.publish_to == 'jitpack' || github.event.inputs.publish_to == 'both'
+        run: |
+          VERSION="${{ needs.pre-check.outputs.version }}"
+          TAG_NAME="${{ steps.create_tag.outputs.tag_name }}"
+          
+          echo "📦 JitPack will automatically build and publish version $VERSION"
+          echo "🔗 Build status: https://jitpack.io/#XichenX/Lumen/$VERSION"
+          echo ""
+          echo "JitPack will automatically:"
+          echo "1. Detect the tag $TAG_NAME"
+          echo "2. Build all modules with version $VERSION"
+          echo "3. Publish to JitPack repository"
+          echo ""
+          echo "Users can use:"
+          echo "  implementation(\"com.github.XichenX:Lumen:$VERSION\")"
       
-      - name: Commit version update back to repository
-        if: github.event_name == 'push' && steps.publish.outputs.publish_success == 'true'
+      # 提交版本更新
+      - name: Commit version update
+        if: steps.build.outputs.build_success == 'true'
         run: |
           VERSION="${{ needs.pre-check.outputs.version }}"
           
-          # 配置 git 用户信息
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # 检查 gradle.properties 是否有变更
           if ! git diff --quiet gradle.properties; then
-            echo "📝 Version change detected, committing update to repository"
+            echo "📝 Committing version update to repository"
             git add gradle.properties
             git commit -m "chore: bump version to $VERSION [skip ci]"
             
-            # 获取当前分支名（通常是 main 或 master）
             BRANCH=$(git rev-parse --abbrev-ref HEAD)
-            echo "📤 Pushing version update to $BRANCH branch"
-            
-            # 重试机制
-            MAX_RETRIES=3
-            RETRY_COUNT=0
-            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-              if git push origin HEAD:$BRANCH; then
-                echo "✅ Version update pushed successfully"
-                break
-              else
-                RETRY_COUNT=$((RETRY_COUNT + 1))
-                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                  echo "⚠️  Push failed, retrying in 5 seconds... (attempt $RETRY_COUNT/$MAX_RETRIES)"
-                  sleep 5
-                else
-                  echo "⚠️  Failed to push after $MAX_RETRIES attempts, skipping"
-                fi
-              fi
-            done
-          else
-            echo "ℹ️  No version change detected in gradle.properties, skipping commit"
+            git push origin HEAD:$BRANCH || echo "⚠️  Failed to push version update"
           fi
       
+      # 创建 GitHub Release
       - name: Create GitHub Release
-        if: github.event_name == 'push' && steps.publish.outputs.publish_success == 'true'
+        if: steps.build.outputs.build_success == 'true'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
+          tag_name: ${{ steps.create_tag.outputs.tag_name || format('v{0}', needs.pre-check.outputs.version) }}
           name: Release v${{ needs.pre-check.outputs.version }}
           body: |
-            ## 📦 Maven Central Release
-            
-            Version: **${{ needs.pre-check.outputs.version }}**
+            ## 📦 Library Release v${{ needs.pre-check.outputs.version }}
             
             ### 📋 Published Modules
             
@@ -648,34 +402,38 @@ jobs:
             
             ### 🚀 Usage
             
+            **Maven Central:**
             ```kotlin
             repositories {
                 mavenCentral()
             }
             
             dependencies {
-                // 聚合模块（推荐）- 自动包含所有子模块
                 implementation("io.github.xichenx:lumen:${{ needs.pre-check.outputs.version }}")
-                
-                // 或独立模块
-                implementation("io.github.xichenx:lumen-core:${{ needs.pre-check.outputs.version }}")
-                implementation("io.github.xichenx:lumen-view:${{ needs.pre-check.outputs.version }}")
-                implementation("io.github.xichenx:lumen-transform:${{ needs.pre-check.outputs.version }}")
             }
             ```
             
+            **JitPack:**
+            ```kotlin
+            repositories {
+                maven { url = uri("https://jitpack.io") }
+            }
+            
+            dependencies {
+                implementation("com.github.XichenX:Lumen:${{ needs.pre-check.outputs.version }}")
+            }
+            ```
+            
+            ### ✅ Version Consistency
+            
+            Both JitPack and Maven Central use the same version: **${{ needs.pre-check.outputs.version }}**
+            
+            - Maven Central: `io.github.xichenx:lumen:${{ needs.pre-check.outputs.version }}`
+            - JitPack: `com.github.XichenX:Lumen:${{ needs.pre-check.outputs.version }}`
+            
             ### 📝 Next Steps
             
-            1. Login to [Sonatype](https://s01.oss.sonatype.org)
-            2. Go to **Staging Repositories**
-            3. Find your repository and click **Close**
-            4. Wait for validation, then click **Release**
-            5. Wait for sync to Maven Central (usually a few hours)
-            
-            ### 🔗 Links
-            
-            - [Maven Central](https://repo1.maven.org/maven2/io/github/xichenx/)
-            - [Sonatype Staging](https://s01.oss.sonatype.org)
+            Check the publish summary below for detailed status and next steps.
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -685,22 +443,30 @@ jobs:
       - name: Publish summary
         if: always()
         run: |
+          VERSION="${{ needs.pre-check.outputs.version }}"
+          PUBLISH_TO="${{ github.event.inputs.publish_to }}"
+          
           echo "## 📊 Publish Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Version | \`${{ needs.pre-check.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`$VERSION\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Build | ${{ steps.build.outputs.build_success == 'true' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Publish | ${{ steps.publish.outputs.publish_success == 'true' && '✅ Success' || (steps.publish.outputs.publish_skipped == 'true' && '⚠️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| GPG Signing | ${{ steps.gpg_setup.outputs.gpg_configured == 'true' && '✅ Configured' || '⚠️ Not Configured' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ "${{ steps.publish.outputs.publish_success }}" == "true" ]; then
-            echo "### ✅ Publish completed successfully!" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Next steps:" >> $GITHUB_STEP_SUMMARY
-            echo "1. Check [Sonatype Staging](https://s01.oss.sonatype.org)" >> $GITHUB_STEP_SUMMARY
-            echo "2. Close and release the staging repository" >> $GITHUB_STEP_SUMMARY
-            echo "3. Wait for sync to Maven Central" >> $GITHUB_STEP_SUMMARY
+          if [ "$PUBLISH_TO" == "maven-central" ] || [ "$PUBLISH_TO" == "both" ]; then
+            echo "| Maven Central | ${{ steps.publish_maven.outputs.publish_maven_success == 'true' && '✅ Success' || '⚠️ Skipped/Failed' }} |" >> $GITHUB_STEP_SUMMARY
           fi
-
+          
+          if [ "$PUBLISH_TO" == "jitpack" ] || [ "$PUBLISH_TO" == "both" ]; then
+            echo "| JitPack | ${{ steps.create_tag.outputs.tag_created == 'true' && '✅ Tag Created' || '⚠️ Tag Exists' }} |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔗 [JitPack Build Status](https://jitpack.io/#XichenX/Lumen/$VERSION)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Version Consistency" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Both JitPack and Maven Central use the same version: **$VERSION**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Maven Central: \`io.github.xichenx:lumen:$VERSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "- JitPack: \`com.github.XichenX:Lumen:$VERSION\`" >> $GITHUB_STEP_SUMMARY

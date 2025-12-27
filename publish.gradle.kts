@@ -15,8 +15,12 @@
  *    - signingInMemoryKeyPassword / SIGNING_PASSWORD (可选)
  */
 
-// 从 gradle.properties 读取版本号
-val versionName: String = project.findProperty("VERSION_NAME") as String? ?: "1.0.0"
+// 统一版本号管理：确保 JitPack 和 Maven Central 使用相同的版本号
+// 优先使用 LIBRARY_VERSION_NAME（组件版本），如果没有则使用 VERSION_NAME
+// 这与 build.gradle.kts 中的版本管理保持一致
+val versionName: String = project.findProperty("LIBRARY_VERSION_NAME") as String?
+    ?: project.findProperty("VERSION_NAME") as String?
+    ?: "1.0.0"
 val isJitPack = System.getenv("JITPACK") == "true"
 
 // 根据发布方式选择不同的 groupId
@@ -27,7 +31,7 @@ val publishGroupId = if (isJitPack) {
     "io.github.$githubUser"
 }
 
-// 设置项目版本
+// 设置项目版本（JitPack 和 Maven Central 使用相同的版本号）
 version = versionName
 
 // 配置发布（仅在非 JitPack 时使用 Maven Central）
@@ -101,6 +105,7 @@ if (!isJitPack && project.plugins.hasPlugin("com.vanniktech.maven.publish")) {
     }
 } else if (isJitPack) {
     // JitPack 模式：使用标准的 maven-publish
+    // 注意：版本号与 Maven Central 保持一致（使用相同的 versionName）
     if (!project.plugins.hasPlugin("maven-publish")) {
         project.plugins.apply("maven-publish")
     }
@@ -112,6 +117,7 @@ if (!isJitPack && project.plugins.hasPlugin("com.vanniktech.maven.publish")) {
                     from(components["release"])
                     groupId = publishGroupId
                     artifactId = project.name
+                    // 使用与 Maven Central 相同的版本号
                     version = versionName
                 }
             }

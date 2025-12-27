@@ -1,7 +1,8 @@
 # JitPack 构建配置
 # JitPack 会自动检测此文件并按照配置构建
+# 注意：此文件必须保留，JitPack 平台需要它来构建项目
 jdk:
-  - openjdk11
+  - openjdk17
 
 before_install:
   - ./gradlew wrapper --gradle-version 8.5
