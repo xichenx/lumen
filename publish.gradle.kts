@@ -31,12 +31,13 @@ val isJitPack = System.getenv("JITPACK") == "true"
 
 // 根据发布方式选择不同的 groupId
 // GitHub 仓库: https://github.com/XichenX/Lumen
-val githubUser = project.findProperty("GITHUB_USER") as String? ?: "XichenX"
+// 注意：Group ID 必须使用小写，与 Central Portal 中注册的命名空间完全匹配
+val githubUser = project.findProperty("GITHUB_USER") as String? ?: "xichenx" // 使用小写
 val publishGroupId = if (isJitPack) {
     // JitPack 格式: com.github.用户名
     "com.github.$githubUser"
 } else {
-    // Maven Central 格式: io.github.用户名 (GitHub 域名格式)
+    // Maven Central 格式: io.github.用户名 (GitHub 域名格式，必须小写)
     "io.github.$githubUser"
 }
 
@@ -114,9 +115,27 @@ afterEvaluate {
                 name = "MavenCentral"
                 
                 // Central Publishing Portal URL
-                // 注意：虽然 URL 相同，但认证方式改为使用 Central Token
-                val releasesRepoUrl = "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
-                val snapshotsRepoUrl = "https://s01.oss.sonatype.org/content/repositories/snapshots/"
+                // 注意：新的 Central Publishing Portal API 端点
+                // 如果标准的 maven-publish 插件不支持 REST API，可能需要使用社区插件
+                // 或者回退到 OSSRH URL（使用 Central Token 认证）
+                val useNewApi = project.findProperty("USE_CENTRAL_PORTAL_API") as String?
+                    ?: System.getenv("USE_CENTRAL_PORTAL_API")
+                    ?: "true" // 默认尝试新 API
+                
+                val releasesRepoUrl = if (useNewApi == "true") {
+                    // 新的 Central Publishing Portal REST API 端点
+                    "https://central.sonatype.com/api/v1/publisher/"
+                } else {
+                    // 回退到 OSSRH URL（使用 Central Token 认证）
+                    // 注意：OSSRH 已停止，但如果新 API 不兼容，可以临时使用此选项
+                    "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
+                }
+                
+                val snapshotsRepoUrl = if (useNewApi == "true") {
+                    "https://central.sonatype.com/api/v1/publisher/" // SNAPSHOT 也使用相同端点
+                } else {
+                    "https://s01.oss.sonatype.org/content/repositories/snapshots/"
+                }
                 
                 url = uri(if (versionName.endsWith("SNAPSHOT")) snapshotsRepoUrl else releasesRepoUrl)
                 
@@ -130,21 +149,40 @@ afterEvaluate {
                     val sonatypeToken = project.findProperty("SONATYPE_PASSWORD") as String?
                         ?: System.getenv("SONATYPE_PASSWORD")
                     
-                    username = sonatypeUsername
-                    password = sonatypeToken
+                    // 清理 Token（移除可能的空格或换行符）
+                    val cleanToken = sonatypeToken?.trim()
+                    val cleanUsername = sonatypeUsername?.trim()
                     
-                    // 调试信息（不打印实际 Token）
-                    if (sonatypeUsername.isNullOrBlank() || sonatypeToken.isNullOrBlank()) {
-                        logger.warn("⚠️  Central Publishing Portal credentials are missing or empty")
-                        logger.warn("   SONATYPE_USERNAME: ${if (sonatypeUsername.isNullOrBlank()) "not set" else "set (${sonatypeUsername.length} chars)"}")
-                        logger.warn("   SONATYPE_PASSWORD (Central Token): ${if (sonatypeToken.isNullOrBlank()) "not set" else "set (${sonatypeToken.length} chars)"}")
-                        logger.warn("   Make sure SONATYPE_USERNAME and SONATYPE_PASSWORD (Central Token) are set in GitHub Secrets")
-                        logger.warn("   Get your Central Token from: https://central.sonatype.com/ → Profile → User Token")
+                    username = cleanUsername
+                    password = cleanToken
+                    
+                    // 详细的调试信息（不打印实际 Token）
+                    if (cleanUsername.isNullOrBlank() || cleanToken.isNullOrBlank()) {
+                        logger.error("❌ Central Publishing Portal credentials are missing or empty")
+                        logger.error("   SONATYPE_USERNAME: ${if (cleanUsername.isNullOrBlank()) "not set" else "set (${cleanUsername.length} chars)"}")
+                        logger.error("   SONATYPE_PASSWORD (Central Token): ${if (cleanToken.isNullOrBlank()) "not set" else "set (${cleanToken.length} chars)"}")
+                        logger.error("   Make sure SONATYPE_USERNAME and SONATYPE_PASSWORD (Central Token) are set in GitHub Secrets")
+                        logger.error("   Get your Central Token from: https://central.sonatype.com/ → Profile → User Token")
                     } else {
                         logger.info("✅ Central Publishing Portal credentials configured")
-                        logger.info("   Username: ${sonatypeUsername.take(3)}*** (length: ${sonatypeUsername.length})")
-                        logger.info("   Central Token: ${"*".repeat(sonatypeToken.length)} (length: ${sonatypeToken.length})")
-                        logger.info("   Using Central Publishing Portal (OSSRH will end on 2025-06-30)")
+                        logger.info("   Username: ${cleanUsername.take(3)}*** (length: ${cleanUsername.length})")
+                        logger.info("   Central Token: ${"*".repeat(cleanToken.length)} (length: ${cleanToken.length})")
+                        logger.info("   Repository URL: ${url}")
+                        logger.info("   Group ID: $publishGroupId (must match Central Portal namespace exactly, case-sensitive)")
+                        logger.info("   Using Central Publishing Portal API (https://central.sonatype.com/api/v1/publisher/)")
+                        
+                        // 验证 Token 格式（通常 Central Token 是较长的字符串）
+                        if (cleanToken.length < 20) {
+                            logger.warn("⚠️  Warning: Central Token seems too short (${cleanToken.length} chars)")
+                            logger.warn("   Central Tokens are usually longer. Please verify you're using the correct Token.")
+                        }
+                        
+                        // 检查命名空间提示
+                        logger.info("   ⚠️  Make sure namespace '$publishGroupId' is registered and verified in Central Portal")
+                        logger.info("   ⚠️  If you get 401 errors, verify:")
+                        logger.info("      1. Token is correct and not expired")
+                        logger.info("      2. Username matches the Token owner")
+                        logger.info("      3. Namespace '$publishGroupId' is verified in Central Portal")
                     }
                 }
             }

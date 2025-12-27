@@ -464,7 +464,7 @@ jobs:
           TOKEN_LEN=${#SONATYPE_PASSWORD}
           echo "   Username: ${SONATYPE_USERNAME:0:3}*** (length: $USERNAME_LEN)"
           echo "   Central Token: $(printf '*%.0s' $(seq 1 $TOKEN_LEN)) (length: $TOKEN_LEN)"
-          echo "   Group ID: io.github.xichenx"
+          echo "   Group ID: io.github.xichenx (must be lowercase, matching Central Portal namespace)"
           echo ""
           echo "📋 Using Central Publishing Portal (OSSRH will end on 2025-06-30)"
           echo "💡 Note: Variable names SONATYPE_USERNAME and SONATYPE_PASSWORD are kept for compatibility"
@@ -472,10 +472,22 @@ jobs:
           echo "   - SONATYPE_PASSWORD: Your Central Portal Token (variable name says 'PASSWORD' but use Token!)"
           echo ""
           echo "⚠️  If you get 401 errors, check:"
-          echo "   1. SONATYPE_USERNAME: Your Central Portal username (short username)"
-          echo "   2. SONATYPE_PASSWORD: Your Central Portal Token (not password!)"
+          echo "   1. SONATYPE_USERNAME: Your Central Portal username (short username, usually 4-8 chars)"
+          echo "   2. SONATYPE_PASSWORD: Your Central Portal Token (not password! Token is usually 30+ chars)"
           echo "   3. Get your Token from: https://central.sonatype.com/ → Profile → User Token"
           echo "   4. Your namespace 'io.github.xichenx' must be registered and verified in Central Portal"
+          echo "   5. Token format: Should be a long string (30+ characters), no spaces or line breaks"
+          echo "   6. Username format: Should be your short Central Portal username (not email)"
+          echo ""
+          echo "🔍 Debugging info:"
+          echo "   - Username length: $USERNAME_LEN (expected: 4-8)"
+          echo "   - Token length: $TOKEN_LEN (expected: 30+)"
+          if [ $TOKEN_LEN -lt 20 ]; then
+            echo "   ⚠️  WARNING: Token seems too short! Central Tokens are usually 30+ characters"
+          fi
+          if [ $USERNAME_LEN -gt 20 ]; then
+            echo "   ⚠️  WARNING: Username seems too long! Should be short username (4-8 chars)"
+          fi
           echo ""
           
           echo "🚀 Publishing version $VERSION to Maven Central..."
