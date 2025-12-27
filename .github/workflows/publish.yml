@@ -336,7 +336,8 @@ jobs:
           # 导出密钥文件用于 Gradle 签名
           # 方法1: 使用 --pinentry-mode loopback 和 --passphrase-fd
           echo "📤 Exporting GPG key..."
-          if echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID" > secret.gpg 2>&1; then
+          echo "   Using key ID: $KEY_ID_LONG"
+          if echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID_LONG" > secret.gpg 2>&1; then
             # 验证导出的文件
             if [ -f secret.gpg ] && [ -s secret.gpg ] && grep -q "BEGIN PGP PRIVATE KEY BLOCK" secret.gpg; then
               echo "✅ GPG key exported successfully to secret.gpg"
@@ -354,7 +355,7 @@ jobs:
             echo "📤 Trying alternative export method..."
             GPG_TTY=$(tty) || GPG_TTY=/dev/tty
             export GPG_TTY
-            echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID" > secret.gpg 2>&1 || {
+            echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID_LONG" > secret.gpg 2>&1 || {
               echo "⚠️  Method 2 also failed, trying method 3..."
               rm -f secret.gpg
             }
@@ -379,7 +380,7 @@ jobs:
               echo "$CLEANED_KEY" | base64 -d 2>/dev/null | gpg --batch --yes --import 2>&1
             fi
             # 再次尝试导出
-            echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID" > secret.gpg 2>&1 || true
+            echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID_LONG" > secret.gpg 2>&1 || true
           fi
           
           # 最终验证
