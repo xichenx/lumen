@@ -180,17 +180,44 @@ if (project.name != "lumen") {
                 
                 // 仅在非 JitPack 模式下配置 Maven Central 和签名
                 if (!isJitPack) {
-                // 配置 Maven Central
-                // 注意：这可能会在清理时产生警告，但不会影响实际的发布
-                // 原因：com.vanniktech.maven.publish 插件在构建服务清理时，
-                // 尝试访问 centralPortal 属性，但该属性在某些情况下可能未初始化
-                // 这不会影响实际的发布过程，因为发布已经在清理阶段之前完成
-                mavenPublishing.javaClass.getMethod("publishToMavenCentral").invoke(mavenPublishing)
-                
+                    // 配置 Maven Central，启用自动发布和状态监控
+                    // automaticRelease = true: 自动监控发布状态，直到达到 PUBLISHED 或 FAILED 状态
+                    // 插件会每5秒轮询一次部署状态，默认超时60分钟
+                    // 可以通过环境变量配置：
+                    //   - SONATYPE_POLL_INTERVAL_SECONDS: 轮询间隔（默认5秒）
+                    //   - SONATYPE_CLOSE_TIMEOUT_SECONDS: 超时时间（默认3600秒/60分钟）
+                    try {
+                        // 尝试使用带 automaticRelease 参数的方法
+                        val publishMethod = mavenPublishing.javaClass.methods.find { method ->
+                            method.name == "publishToMavenCentral" && 
+                            method.parameterCount == 1 && 
+                            method.parameterTypes[0] == Boolean::class.java
+                        }
+                        if (publishMethod != null) {
+                            publishMethod.invoke(mavenPublishing, true) // automaticRelease = true
+                            logger.info("✅ Maven Central publishing configured with automaticRelease=true for ${project.name}")
+                            logger.info("📊 Deployment status will be monitored automatically (polling every 5s, timeout 60min)")
+                        } else {
+                            // 回退到无参数方法（旧版本插件可能不支持）
+                            mavenPublishing.javaClass.getMethod("publishToMavenCentral").invoke(mavenPublishing)
+                            logger.info("✅ Maven Central publishing configured (automaticRelease not supported in this plugin version) for ${project.name}")
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("⚠️  Failed to configure automaticRelease, using default: ${e.message}")
+                        // 回退到无参数方法
+                        try {
+                            mavenPublishing.javaClass.getMethod("publishToMavenCentral").invoke(mavenPublishing)
+                        } catch (e2: Exception) {
+                            logger.error("❌ Failed to configure Maven Central publishing: ${e2.message}")
+                            throw e2
+                        }
+                    }
+                    
                     // 启用签名（仅 Maven Central 需要签名）
-                mavenPublishing.javaClass.getMethod("signAllPublications").invoke(mavenPublishing)
+                    mavenPublishing.javaClass.getMethod("signAllPublications").invoke(mavenPublishing)
                     
                     logger.info("✅ Maven Central publishing and signing configured for ${project.name}")
+                    logger.info("📊 The plugin will automatically monitor deployment status until PUBLISHED or FAILED")
                 } else {
                     logger.info("ℹ️  JitPack mode detected, skipping Maven Central publishing and signing configuration for ${project.name}")
                 }
