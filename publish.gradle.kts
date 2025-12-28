@@ -17,14 +17,17 @@
  */
 
 // 统一版本号管理：确保 JitPack 和 Maven Central 使用相同的版本号
-// 优先使用 LIBRARY_VERSION_NAME（组件版本），如果没有则使用 VERSION_NAME
+// 优先级：JitPack 传递的 version > LIBRARY_VERSION_NAME > VERSION_NAME > 默认值
 // 这与 build.gradle.kts 中的版本管理保持一致
 val versionName: String = run {
+    // JitPack 通过 -Pversion=xxx 传递版本号，优先使用
+    val jitpackVersion = project.findProperty("version") as String?
     val libraryVersion = project.findProperty("LIBRARY_VERSION_NAME") as String?
     val fallbackVersion = project.findProperty("VERSION_NAME") as String?
     
-    // 如果 LIBRARY_VERSION_NAME 存在且不为空，使用它；否则使用 VERSION_NAME；最后回退到默认值
+    // 优先级：JitPack version > LIBRARY_VERSION_NAME > VERSION_NAME > 默认值
     when {
+        !jitpackVersion.isNullOrBlank() -> jitpackVersion.trim()
         !libraryVersion.isNullOrBlank() -> libraryVersion.trim()
         !fallbackVersion.isNullOrBlank() -> fallbackVersion.trim()
         else -> "1.0.0"
@@ -160,18 +163,22 @@ if (project.plugins.hasPlugin("com.vanniktech.maven.publish")) {
                     String::class.java
                 ).invoke(mavenPublishing, publishGroupId, artifactId, versionName)
                 
-                // 仅在非 JitPack 模式下配置 Maven Central
+                // 仅在非 JitPack 模式下配置 Maven Central 和签名
                 if (!isJitPack) {
-                // 配置 Maven Central
-                // 注意：这可能会在清理时产生警告，但不会影响实际的发布
-                // 原因：com.vanniktech.maven.publish 插件在构建服务清理时，
-                // 尝试访问 centralPortal 属性，但该属性在某些情况下可能未初始化
-                // 这不会影响实际的发布过程，因为发布已经在清理阶段之前完成
-                mavenPublishing.javaClass.getMethod("publishToMavenCentral").invoke(mavenPublishing)
+                    // 配置 Maven Central
+                    // 注意：这可能会在清理时产生警告，但不会影响实际的发布
+                    // 原因：com.vanniktech.maven.publish 插件在构建服务清理时，
+                    // 尝试访问 centralPortal 属性，但该属性在某些情况下可能未初始化
+                    // 这不会影响实际的发布过程，因为发布已经在清理阶段之前完成
+                    mavenPublishing.javaClass.getMethod("publishToMavenCentral").invoke(mavenPublishing)
+                    
+                    // 启用签名（仅 Maven Central 需要签名）
+                    mavenPublishing.javaClass.getMethod("signAllPublications").invoke(mavenPublishing)
+                    
+                    logger.info("✅ Maven Central publishing and signing configured for ${project.name}")
+                } else {
+                    logger.info("ℹ️  JitPack mode detected, skipping Maven Central publishing and signing configuration for ${project.name}")
                 }
-                
-                // 启用签名
-                mavenPublishing.javaClass.getMethod("signAllPublications").invoke(mavenPublishing)
                 
                 logger.info("✅ mavenPublishing configured for ${project.name}")
             } catch (e: Exception) {
