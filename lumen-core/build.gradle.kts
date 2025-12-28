@@ -4,8 +4,6 @@ plugins {
     alias(libs.plugins.maven.publish)
 }
 
-// 应用发布配置
-apply(from = rootProject.file("publish.gradle.kts"))
 
 android {
     namespace = "com.xichen.lumen.core"

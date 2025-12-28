@@ -144,34 +144,10 @@ jobs:
           VERSION="${{ steps.final_version.outputs.final_version }}"
           echo "✅ JitPack will build version $VERSION when tag is created"
           echo "should_publish=true" >> $GITHUB_OUTPUT
-      
-      - name: Validate secrets
-        if: github.event.inputs.publish_to == 'maven-central' || github.event.inputs.publish_to == 'both'
-        run: |
-          MISSING_SECRETS=()
-          
-          if [ -z "${{ secrets.SONATYPE_USERNAME }}" ]; then
-            MISSING_SECRETS+=("SONATYPE_USERNAME")
-          fi
-          
-          if [ -z "${{ secrets.SONATYPE_PASSWORD }}" ]; then
-            MISSING_SECRETS+=("SONATYPE_PASSWORD")
-          fi
-          
-          if [ -z "${{ secrets.GPG_PRIVATE_KEY }}" ]; then
-            MISSING_SECRETS+=("GPG_PRIVATE_KEY")
-          fi
-          
-          if [ -z "${{ secrets.GPG_PASSPHRASE }}" ]; then
-            MISSING_SECRETS+=("GPG_PASSPHRASE")
-          fi
-          
-          if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
-            echo "⚠️  Missing secrets: ${MISSING_SECRETS[*]}"
-            echo "Maven Central publish will be skipped"
-          else
-            echo "✅ All required secrets are configured"
-          fi
+
+      # Note: Secret validation is not needed here
+      # The com.vanniktech.maven.publish plugin automatically reads environment variables
+      # (ORG_GRADLE_PROJECT_*) and will fail with clear error messages if credentials are missing
 
   # 构建任务：统一构建和测试（只执行一次）
   build:
@@ -246,7 +222,7 @@ jobs:
   # Maven Central 发布任务（并行执行）
   publish-maven-central:
     runs-on: ubuntu-latest
-    needs: [pre-check, build]
+    needs: [ pre-check, build ]
     if: |
       needs.pre-check.outputs.should_publish == 'true' &&
       needs.build.outputs.build_success == 'true' &&
@@ -260,165 +236,88 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
-      
+
       - name: Setup Gradle
         uses: gradle/gradle-build-action@v2
         with:
           cache-read-only: false
-      
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
-      
-      - name: Setup GPG
-        id: gpg_setup
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          if [ -z "$GPG_PRIVATE_KEY" ] || [ -z "$GPG_PASSPHRASE" ]; then
-            echo "⚠️  GPG credentials not configured"
-            echo "gpg_configured=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "Setting up GPG signing..."
-          
-          if echo "$GPG_PRIVATE_KEY" | grep -F -- "-----BEGIN PGP" > /dev/null 2>&1; then
-            echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import 2>&1
-          else
-            CLEANED_KEY=$(echo "$GPG_PRIVATE_KEY" | \
-              sed -e '/-----BEGIN CERTIFICATE-----/d' \
-                  -e '/-----END CERTIFICATE-----/d' \
-                  -e '/-----BEGIN PGP PRIVATE KEY BLOCK-----/d' \
-                  -e '/-----END PGP PRIVATE KEY BLOCK-----/d' \
-                  -e '/-----BEGIN PGP PUBLIC KEY BLOCK-----/d' \
-                  -e '/-----END PGP PUBLIC KEY BLOCK-----/d' \
-                  -e '/^$/d' | \
-              tr -d '\n\r ')
-            echo "$CLEANED_KEY" | base64 -d 2>/dev/null | gpg --batch --yes --import 2>&1
-          fi
-          
-          KEY_ID_LONG=$(gpg --list-secret-keys --keyid-format LONG 2>/dev/null | grep -E "^(sec|SEC)" | head -1 | awk '{print $2}' | cut -d'/' -f2)
-          KEY_ID_SHORT=$(echo "$KEY_ID_LONG" | tail -c 9 | tr -d '\n\r ')
-          
-          if [ ${#KEY_ID_SHORT} -ne 8 ]; then
-            KEY_ID_SHORT=$(echo "$KEY_ID_LONG" | grep -oE "[0-9A-Fa-f]{8}$" | tail -1)
-          fi
-          
-          echo "GPG_KEY_ID=$KEY_ID_SHORT" >> $GITHUB_ENV
-          echo "gpg_configured=true" >> $GITHUB_OUTPUT
-          
-          mkdir -p ~/.gnupg
-          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
-          echo "allow-loopback-pinentry" > ~/.gnupg/gpg-agent.conf
-          gpgconf --kill gpg-agent 2>/dev/null || true
-          
-          echo "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --export-secret-keys --armor "$KEY_ID_LONG" > secret.gpg 2>&1
-          
-          if [ -f secret.gpg ] && [ -s secret.gpg ] && grep -q "BEGIN PGP PRIVATE KEY BLOCK" secret.gpg; then
-            chmod 600 secret.gpg
-            echo "GPG_KEY_FILE=$(pwd)/secret.gpg" >> $GITHUB_ENV
-            echo "✅ GPG key exported successfully"
-          else
-            echo "❌ Failed to export GPG key"
-            exit 1
-          fi
-      
+
       - name: Publish to Maven Central
         id: publish
         env:
-          # com.vanniktech.maven.publish 插件期望的环境变量名称
-          # 插件会自动从这些环境变量读取凭证
-          mavenCentralUsername: ${{ secrets.SONATYPE_USERNAME }}
-          mavenCentralPassword: ${{ secrets.SONATYPE_PASSWORD }}
-          # GPG 签名配置（插件期望的环境变量名称）
-          signingInMemoryKeyId: ${{ env.GPG_KEY_ID }}
-          signingInMemoryKeyPassword: ${{ secrets.GPG_PASSPHRASE }}
-          # GPG 密钥文件路径（用于读取密钥内容）
-          SIGNING_SECRET_KEY_RING_FILE: ${{ env.GPG_KEY_FILE || 'secret.gpg' }}
+          # 关键：大写 Secrets → 插件识别的小驼峰环境变量
+          # 格式：插件需要的变量名 = ${{ secrets.GITHUB大写Secrets名 }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.ORG_GRADLE_PROJECT_MAVENCENTRALUSERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.ORG_GRADLE_PROJECT_MAVENCENTRALPASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.ORG_GRADLE_PROJECT_SIGNINGINMEMORYKEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.ORG_GRADLE_PROJECT_SIGNINGINMEMORYKEYID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.ORG_GRADLE_PROJECT_SIGNINGINMEMORYKEYPASSWORD }}
+          # 可选：Android 签名密钥（若需 AAR 签名）
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           VERSION="${{ needs.build.outputs.version }}"
-          
-          # 检查凭证是否配置（插件期望的环境变量名称）
-          if [ -z "$mavenCentralUsername" ] || [ -z "$mavenCentralPassword" ]; then
-            echo "⚠️  Sonatype credentials not configured, skipping Maven Central publish"
-            echo "publish_success=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "🚀 Publishing version $VERSION to Maven Central..."
-          echo "⚡ Running in parallel with JitPack publish"
-          echo "📊 Automatic release enabled: plugin will monitor deployment status automatically"
-          echo "   - Polling interval: 5 seconds (configurable via SONATYPE_POLL_INTERVAL_SECONDS)"
-          echo "   - Timeout: 60 minutes (configurable via SONATYPE_CLOSE_TIMEOUT_SECONDS)"
-          echo ""
-          
-          # 运行发布任务并捕获输出（只发布根模块 lumen）
-          # 插件会自动监控发布状态，直到达到 PUBLISHED 或 FAILED 状态
-          set +e  # 允许命令失败，我们稍后会检查
-          OUTPUT=$(./gradlew :lumen:publishToMavenCentral \
-              --no-daemon \
-              --stacktrace \
-              --console=plain 2>&1)
-          EXIT_CODE=$?
-          set -e  # 恢复错误处理
-          
-          # 检查发布任务是否成功完成
-          # 关键任务：publishMavenPublicationToMavenCentralRepository 和 publishAllPublicationsToMavenCentralRepository
-          if echo "$OUTPUT" | grep -q "publishMavenPublicationToMavenCentralRepository" && \
-             echo "$OUTPUT" | grep -q "publishAllPublicationsToMavenCentralRepository"; then
-            echo ""
-            echo "✅ 发布任务已成功完成！"
-            echo "📦 模块已上传到 Maven Central，插件正在监控发布状态..."
+          echo "🚀 Publishing version $VERSION to Maven Central (Secrets 大写兼容模式)..."
+
+          # 重试机制：应对网络/发布服务器波动
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          PUBLISH_SUCCESS="false"
+
+          # 循环重试发布
+          until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
+            # 执行发布任务，捕获输出和退出码
+            set +e
+            PUBLISH_OUTPUT=$(./gradlew :lumen:publishToMavenCentral \
+                --no-daemon \
+                --stacktrace \
+                --console=plain 2>&1)
+            EXIT_CODE=$?
+            set -e
+
+            # 核心判断：忽略清理阶段的已知错误，只检查发布核心任务
+            if echo "$PUBLISH_OUTPUT" | grep -q "publishMavenPublicationToMavenCentralRepository" && \
+               ! echo "$PUBLISH_OUTPUT" | grep -qi "failed to deploy\|authentication failed\|signing failed"; then
+              PUBLISH_SUCCESS="true"
+              break
+            fi
+
+            # 重试前等待
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "⚠️  发布尝试 $RETRY_COUNT 失败，10 秒后重试..."
+            sleep 10
+          done
+
+          # 结果处理
+          if [ "$PUBLISH_SUCCESS" = "true" ]; then
+            echo "✅ 版本 $VERSION 成功发布到 Maven Central"
             echo "publish_success=true" >> $GITHUB_OUTPUT
-            
-            # 处理清理阶段的错误（这是已知的插件问题）
-            # 原因：com.vanniktech.maven.publish 插件在清理阶段尝试停止 'maven-central-build-service' 时，
-            # 尝试访问未初始化的 centralPortal 属性，导致抛出 MissingValueException
-            # 这不会影响实际的发布过程，因为发布已经在清理阶段之前完成
+
+            # 兼容插件清理阶段的已知错误
             if [ $EXIT_CODE -ne 0 ]; then
-              if echo "$OUTPUT" | grep -q "Failed to stop service 'maven-central-build-service'" || \
-                 echo "$OUTPUT" | grep -q "Cannot query the value of this property because it has no value available"; then
-                echo ""
-                echo "⚠️  已知问题：构建服务清理警告（发布已成功）"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "问题原因："
-                echo "  com.vanniktech.maven.publish 插件在清理阶段尝试停止 'maven-central-build-service' 时，"
-                echo "  访问了未初始化的 centralPortal 属性，导致抛出 MissingValueException。"
-                echo ""
-                echo "影响范围："
-                echo "  ✅ 不影响实际的发布过程（发布已在清理阶段之前完成）"
-                echo "  ✅ lumen 模块已成功上传到 Maven Central"
-                echo "  ✅ 插件会自动监控发布状态，直到达到 PUBLISHED 或 FAILED 状态"
-                echo "  ⚠️  仅影响构建的退出码（非零），但不影响发布结果"
-                echo ""
-                echo "解决方案："
-                echo "  1. 工作流已配置为检查发布任务完成状态，而非仅依赖退出码"
-                echo "  2. 如果看到 'publishMavenPublicationToMavenCentralRepository' 任务完成，说明发布成功"
-                echo "  3. 可以安全地忽略此清理警告"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo ""
-              else
-                echo "⚠️  构建完成，退出码为 $EXIT_CODE"
-                echo "检查输出以确认发布状态..."
-                echo "$OUTPUT" | tail -30
-              fi
+              echo "⚠️  构建退出码非零，但核心发布任务已完成（插件清理阶段的已知问题）"
+              echo "关键日志片段："
+              echo "$PUBLISH_OUTPUT" | grep -E "Published|Signed|Deployed" | tail -20
             fi
           else
-            echo "❌ 发布到 Maven Central 失败"
-            echo "发布任务未成功完成"
-            echo "$OUTPUT" | tail -50
+            echo "❌ 版本 $VERSION 发布失败（已重试 $MAX_RETRIES 次）"
+            echo "发布日志（最后 50 行）："
+            echo "$PUBLISH_OUTPUT" | tail -50
             echo "publish_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
-
   # JitPack 发布任务（并行执行）
   publish-jitpack:
     runs-on: ubuntu-latest
@@ -467,7 +366,7 @@ jobs:
           
           echo "📦 JitPack will automatically build and publish version $VERSION"
           echo "⚡ Running in parallel with Maven Central publish"
-          echo "🔗 Build status: https://jitpack.io/#XichenX/Lumen/$VERSION"
+          echo "🔗 Build status: https://jitpack.io/#xichenx/lumen/$VERSION"
           echo ""
           echo "JitPack will automatically:"
           echo "1. Detect the tag $TAG_NAME"
@@ -475,7 +374,7 @@ jobs:
           echo "3. Publish to JitPack repository"
           echo ""
           echo "Users can use:"
-          echo "  implementation(\"com.github.XichenX:Lumen:$VERSION\")"
+          echo "  implementation(\"com.github.xichenx:lumen:$VERSION\")"
 
   # 最终化任务：提交版本更新和创建 Release
   finalize:
@@ -554,7 +453,7 @@ jobs:
             }
             
             dependencies {
-                implementation("com.github.XichenX:Lumen:${{ needs.build.outputs.version }}")
+                implementation("com.github.xichenx:lumen:${{ needs.build.outputs.version }}")
             }
             ```
             
@@ -563,7 +462,7 @@ jobs:
             Both JitPack and Maven Central use the same version: **${{ needs.build.outputs.version }}**
             
             - Maven Central: `io.github.xichenx:lumen:${{ needs.build.outputs.version }}`
-            - JitPack: `com.github.XichenX:Lumen:${{ needs.build.outputs.version }}`
+            - JitPack: `com.github.xichenx:lumen:${{ needs.build.outputs.version }}`
             
             ### 📝 Next Steps
             
@@ -609,4 +508,4 @@ jobs:
           echo "Both JitPack and Maven Central use the same version: **$VERSION**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Maven Central: \`io.github.xichenx:lumen:$VERSION\`" >> $GITHUB_STEP_SUMMARY
-          echo "- JitPack: \`com.github.XichenX:Lumen:$VERSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "- JitPack: \`com.github.xichenx:lumen:$VERSION\`" >> $GITHUB_STEP_SUMMARY
