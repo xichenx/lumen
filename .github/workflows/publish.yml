@@ -342,8 +342,8 @@ jobs:
         id: create_tag
         run: |
           VERSION="${{ needs.build.outputs.version }}"
-          # 使用不带 v 前缀的标签，这样 JitPack 依赖可以使用 0.0.2 而不是 v0.0.2
-          TAG_NAME="$VERSION"
+          # JitPack 标签使用 v 前缀（如 v1.0.0），但依赖坐标中的版本号不带 v（如 1.0.0）
+          TAG_NAME="v$VERSION"
           
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
             echo "⚠️  Tag $TAG_NAME already exists"
