@@ -28,8 +28,13 @@ logger.info("📦 Publishing version: $publishVersion for ${project.name}")
 
 // 配置 Maven 发布（直接在这里配置，可以访问插件类型）
 mavenPublishing {
-    publishToMavenCentral(automaticRelease = true)
-    signAllPublications()
+    // 只在非 JitPack 环境发布到 Maven Central（JitPack 不需要）
+    val isJitPack = System.getenv("JITPACK") == "true"
+    if (!isJitPack) {
+        publishToMavenCentral(automaticRelease = true)
+        // 只在 Maven Central 发布时启用签名（JitPack 不需要签名）
+        signAllPublications()
+    }
 
     coordinates("io.github.xichenx", "lumen", publishVersion)
     pom {
