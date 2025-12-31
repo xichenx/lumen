@@ -116,24 +116,43 @@ jobs:
           BRANCH_NAME="${{ steps.version_info.outputs.branch_name }}"
           DEFAULT_VERSION="${{ steps.version_info.outputs.default_version }}"
           
-          # 确定 BOM 基础版本
+          # 确定 BOM 基础版本（遵循分支规则）
           if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
-            # main分支：如果当前版本为空，从0.0.1开始；否则使用当前版本
+            # main分支：从0.0.1开始
             if [ -z "$CURRENT_BOM" ] || [ "$CURRENT_BOM" == "" ]; then
               BASE_BOM="0.0.1"
+              echo "📌 main分支：使用起始版本 0.0.1"
             else
-              BASE_BOM="$CURRENT_BOM"
+              # 检查版本是否符合 main 分支规则（应该是 0.x.x）
+              MAJOR_VERSION=$(echo "$CURRENT_BOM" | cut -d'.' -f1)
+              if [ "$MAJOR_VERSION" != "0" ]; then
+                echo "⚠️  警告：version.properties 中的 BOM 版本 $CURRENT_BOM 不符合 main 分支规则（应为 0.x.x），重置为 0.0.1"
+                BASE_BOM="0.0.1"
+              else
+                BASE_BOM="$CURRENT_BOM"
+                echo "📌 main分支：使用 version.properties 中的版本 $BASE_BOM"
+              fi
             fi
           elif [[ "$BRANCH_NAME" == v* ]] || [ "$BRANCH_NAME" == "develop" ]; then
-            # 开发分支：如果当前版本为空，从1.0.0开始；否则使用当前版本
+            # 开发分支（v1.0.0/develop）：从1.0.0开始
             if [ -z "$CURRENT_BOM" ] || [ "$CURRENT_BOM" == "" ]; then
               BASE_BOM="1.0.0"
+              echo "📌 开发分支：使用起始版本 1.0.0"
             else
-              BASE_BOM="$CURRENT_BOM"
+              # 检查版本是否符合开发分支规则（应该是 1.x.x 或更高）
+              MAJOR_VERSION=$(echo "$CURRENT_BOM" | cut -d'.' -f1)
+              if [ "$MAJOR_VERSION" == "0" ]; then
+                echo "⚠️  警告：version.properties 中的 BOM 版本 $CURRENT_BOM 不符合开发分支规则（应为 1.x.x 或更高），重置为 1.0.0"
+                BASE_BOM="1.0.0"
+              else
+                BASE_BOM="$CURRENT_BOM"
+                echo "📌 开发分支：使用 version.properties 中的版本 $BASE_BOM"
+              fi
             fi
           else
             # 其他分支：使用当前版本或默认值
             BASE_BOM=${CURRENT_BOM:-"$DEFAULT_VERSION"}
+            echo "📌 其他分支：使用版本 $BASE_BOM"
           fi
           
           # Determine BOM version
