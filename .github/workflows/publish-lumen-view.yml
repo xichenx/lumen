@@ -47,7 +47,8 @@ jobs:
         id: version_info
         run: |
           BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          CURRENT_VERSION=$(grep "^LUMEN_VIEW_VERSION=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
+          # 从 version.properties 读取当前版本
+          CURRENT_VERSION=$(grep "^lumen.view.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
           
           # 根据分支确定默认版本
           if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
@@ -58,8 +59,9 @@ jobs:
             DEFAULT_VERSION="1.0.0"
           fi
           
+          # 如果 version.properties 中没有版本，使用默认值
           if [ -z "$CURRENT_VERSION" ]; then
-            CURRENT_VERSION=$(grep "^VERSION_NAME=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "$DEFAULT_VERSION")
+            CURRENT_VERSION="$DEFAULT_VERSION"
           fi
           
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
