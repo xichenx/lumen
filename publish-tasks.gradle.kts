@@ -18,8 +18,7 @@ tasks.register("publishAllToMavenCentral") {
     )
     
     doLast {
-        val versionName = project.findProperty("VERSION_NAME") as String? ?: "1.0.0"
-        println("✅ All modules published to Maven Central (version: $versionName)")
+        println("✅ All modules published to Maven Central")
         println("📋 Next steps:")
         println("   1. Check Central Portal: https://central.sonatype.com/")
         println("   2. Wait for sync to Maven Central (10-30 minutes)")
@@ -40,8 +39,7 @@ tasks.register("publishAllToMavenLocal") {
     )
     
     doLast {
-        val versionName = project.findProperty("VERSION_NAME") as String? ?: "1.0.0"
-        println("✅ All modules published to local Maven repository (version: $versionName)")
+        println("✅ All modules published to local Maven repository")
         println("📦 Local repository: ${System.getProperty("user.home")}/.m2/repository")
     }
 }
