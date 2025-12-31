@@ -81,24 +81,65 @@ jobs:
           BRANCH_NAME="${{ steps.version_info.outputs.branch_name }}"
           DEFAULT_VERSION="${{ steps.version_info.outputs.default_version }}"
           
-          # 确定基础版本
+          # 从分支名称提取版本号（支持 v2.0.0 或 v2.0.0/develop 格式）
+          BRANCH_VERSION=""
+          if [[ "$BRANCH_NAME" == v* ]]; then
+            # 提取版本号：v2.0.0 -> 2.0.0, v2.0.0/develop -> 2.0.0
+            BRANCH_VERSION=$(echo "$BRANCH_NAME" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+            if [[ "$BRANCH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "📌 从分支名称提取版本号: $BRANCH_NAME -> $BRANCH_VERSION"
+            else
+              BRANCH_VERSION=""
+              echo "⚠️  无法从分支名称提取有效版本号: $BRANCH_NAME"
+            fi
+          fi
+          
+          # 确定基础版本（遵循分支规则）
           if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
-            # main分支：如果当前版本为空，从0.0.1开始；否则使用当前版本
+            # main分支：从0.0.1开始
             if [ -z "$CURRENT" ] || [ "$CURRENT" == "" ]; then
               BASE_VERSION="0.0.1"
+              echo "📌 main分支：使用起始版本 0.0.1"
             else
-              BASE_VERSION="$CURRENT"
+              # 检查版本是否符合 main 分支规则（应该是 0.x.x）
+              MAJOR_VERSION=$(echo "$CURRENT" | cut -d'.' -f1)
+              if [ "$MAJOR_VERSION" != "0" ]; then
+                echo "⚠️  警告：version.properties 中的版本 $CURRENT 不符合 main 分支规则（应为 0.x.x），重置为 0.0.1"
+                BASE_VERSION="0.0.1"
+              else
+                BASE_VERSION="$CURRENT"
+                echo "📌 main分支：使用 version.properties 中的版本 $BASE_VERSION"
+              fi
             fi
           elif [[ "$BRANCH_NAME" == v* ]] || [ "$BRANCH_NAME" == "develop" ]; then
-            # 开发分支：如果当前版本为空，从1.0.0开始；否则使用当前版本
+            # 开发分支：必须从分支名称提取版本号
+            if [ -z "$BRANCH_VERSION" ]; then
+              echo "❌ 错误：无法从分支名称 '$BRANCH_NAME' 提取有效版本号"
+              echo "   开发分支名称格式应为：v2.0.0 或 v2.0.0/develop（其中 2.0.0 为版本号）"
+              echo "   当前分支名称不符合格式要求，发布失败"
+              exit 1
+            fi
+            
+            # 有分支版本号，使用分支版本号
             if [ -z "$CURRENT" ] || [ "$CURRENT" == "" ]; then
-              BASE_VERSION="1.0.0"
+              BASE_VERSION="$BRANCH_VERSION"
+              echo "📌 开发分支（$BRANCH_NAME）：使用分支起始版本 $BASE_VERSION"
             else
-              BASE_VERSION="$CURRENT"
+              # 检查版本是否符合开发分支规则（应该与分支版本号的主版本号一致）
+              CURRENT_MAJOR=$(echo "$CURRENT" | cut -d'.' -f1)
+              BRANCH_MAJOR=$(echo "$BRANCH_VERSION" | cut -d'.' -f1)
+              if [ "$CURRENT_MAJOR" != "$BRANCH_MAJOR" ]; then
+                echo "⚠️  警告：version.properties 中的版本 $CURRENT 不符合开发分支规则（应为 $BRANCH_MAJOR.x.x），重置为 $BRANCH_VERSION"
+                BASE_VERSION="$BRANCH_VERSION"
+              else
+                BASE_VERSION="$CURRENT"
+                echo "📌 开发分支（$BRANCH_NAME）：使用 version.properties 中的版本 $BASE_VERSION"
+              fi
             fi
           else
             # 其他分支：使用当前版本或默认值
             BASE_VERSION=${CURRENT:-"$DEFAULT_VERSION"}
+            echo "📌 其他分支：使用版本 $BASE_VERSION"
           fi
           
           if [ -n "${{ github.event.inputs.version }}" ]; then
