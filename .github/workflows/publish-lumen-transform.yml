@@ -11,7 +11,7 @@ on:
         type: boolean
         default: true
       publish_to:
-        description: 'Where to publish (JitPack uses unified lumen module, not individual modules)'
+        description: 'Where to publish'
         type: choice
         required: true
         default: 'maven-central'
@@ -273,8 +273,5 @@ jobs:
           echo "\`\`\`kotlin" >> $GITHUB_STEP_SUMMARY
           echo "// Maven Central" >> $GITHUB_STEP_SUMMARY
           echo "implementation(\"io.github.xichenx:lumen-transform:$VERSION\")" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "// JitPack: Use unified lumen module instead" >> $GITHUB_STEP_SUMMARY
-          echo "// implementation(\"com.github.xichenx:lumen:$VERSION\")" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
