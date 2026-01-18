@@ -4,16 +4,12 @@ plugins {
     alias(libs.plugins.maven.publish)
 }
 
-// 版本配置：优先级 LUMEN_VIEW_VERSION > LIBRARY_VERSION_NAME > VERSION_NAME > 默认值
+// 版本配置：优先级 LUMEN_VIEW_VERSION > 默认值
 val publishVersion: String = run {
     val moduleVersion = project.findProperty("LUMEN_VIEW_VERSION") as String?
-    val libraryVersion = project.findProperty("LIBRARY_VERSION_NAME") as String?
-    val versionName = project.findProperty("VERSION_NAME") as String?
     
     when {
         !moduleVersion.isNullOrBlank() -> moduleVersion.trim()
-        !libraryVersion.isNullOrBlank() -> libraryVersion.trim()
-        !versionName.isNullOrBlank() -> versionName.trim()
         else -> "1.0.0"
     }
 }

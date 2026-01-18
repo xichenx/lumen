@@ -8,7 +8,7 @@
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-purple?style=flat&logo=kotlin)
 ![Android](https://img.shields.io/badge/Android-API%2024+-green?style=flat&logo=android)
 ![License](https://img.shields.io/badge/License-Apache%202.0-yellow?style=flat)
-![Maven Central](https://img.shields.io/maven-central/v/io.github.xichenx/lumen?label=Maven%20Central&style=flat)
+![Maven Central](https://img.shields.io/maven-central/v/io.github.xichenx/lumen-bom?label=Maven%20Central&style=flat)
 
 **一个 Kotlin-first 的 Android 图片加载库，面向业务友好、AI 场景、列表场景**
 

@@ -7,16 +7,16 @@ on:
         description: 'BOM version to publish (e.g., 1.0.0). Leave empty for auto-increment'
         required: false
       core_version:
-        description: 'lumen-core version (leave empty to use BOM version)'
+        description: 'lumen-core version (leave empty to use version from version.properties)'
         required: false
       transform_version:
-        description: 'lumen-transform version (leave empty to use BOM version)'
+        description: 'lumen-transform version (leave empty to use version from version.properties)'
         required: false
       view_version:
-        description: 'lumen-view version (leave empty to use BOM version)'
+        description: 'lumen-view version (leave empty to use version from version.properties)'
         required: false
       compose_version:
-        description: 'lumen-compose version (leave empty to use BOM version)'
+        description: 'lumen-compose version (leave empty to use version from version.properties)'
         required: false
       auto_increment:
         description: 'Auto increment BOM patch version'
@@ -63,11 +63,12 @@ jobs:
         id: version_info
         run: |
           BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          CURRENT_BOM=$(grep "^VERSION_NAME=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
-          CURRENT_CORE=$(grep "^LUMEN_CORE_VERSION=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
-          CURRENT_TRANSFORM=$(grep "^LUMEN_TRANSFORM_VERSION=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
-          CURRENT_VIEW=$(grep "^LUMEN_VIEW_VERSION=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
-          CURRENT_COMPOSE=$(grep "^LUMEN_COMPOSE_VERSION=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
+          # 从 version.properties 读取当前版本
+          CURRENT_BOM=$(grep "^lumen.bom.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
+          CURRENT_CORE=$(grep "^lumen.core.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
+          CURRENT_TRANSFORM=$(grep "^lumen.transform.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
+          CURRENT_VIEW=$(grep "^lumen.view.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
+          CURRENT_COMPOSE=$(grep "^lumen.compose.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
           
           # 根据分支确定默认版本
           if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
@@ -76,6 +77,23 @@ jobs:
             DEFAULT_VERSION="1.0.0"
           else
             DEFAULT_VERSION="1.0.0"
+          fi
+          
+          # 如果 version.properties 中没有版本，使用默认值
+          if [ -z "$CURRENT_BOM" ]; then
+            CURRENT_BOM="$DEFAULT_VERSION"
+          fi
+          if [ -z "$CURRENT_CORE" ]; then
+            CURRENT_CORE="$DEFAULT_VERSION"
+          fi
+          if [ -z "$CURRENT_TRANSFORM" ]; then
+            CURRENT_TRANSFORM="$DEFAULT_VERSION"
+          fi
+          if [ -z "$CURRENT_VIEW" ]; then
+            CURRENT_VIEW="$DEFAULT_VERSION"
+          fi
+          if [ -z "$CURRENT_COMPOSE" ]; then
+            CURRENT_COMPOSE="$DEFAULT_VERSION"
           fi
           
           echo "current_bom=$CURRENT_BOM" >> $GITHUB_OUTPUT
@@ -98,57 +116,140 @@ jobs:
           BRANCH_NAME="${{ steps.version_info.outputs.branch_name }}"
           DEFAULT_VERSION="${{ steps.version_info.outputs.default_version }}"
           
-          # 确定 BOM 基础版本
-          if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
-            # main分支：如果当前版本为空，从0.0.1开始；否则使用当前版本
-            if [ -z "$CURRENT_BOM" ] || [ "$CURRENT_BOM" == "" ]; then
-              BASE_BOM="0.0.1"
+          # 从分支名称提取版本号（支持 v2.0.0 或 v2.0.0/develop 格式）
+          BRANCH_VERSION=""
+          if [[ "$BRANCH_NAME" == v* ]]; then
+            # 提取版本号：v2.0.0 -> 2.0.0, v2.0.0/develop -> 2.0.0
+            BRANCH_VERSION=$(echo "$BRANCH_NAME" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+            if [[ "$BRANCH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "📌 从分支名称提取版本号: $BRANCH_NAME -> $BRANCH_VERSION"
             else
-              BASE_BOM="$CURRENT_BOM"
+              BRANCH_VERSION=""
+              echo "⚠️  无法从分支名称提取有效版本号: $BRANCH_NAME"
             fi
-          elif [[ "$BRANCH_NAME" == v* ]] || [ "$BRANCH_NAME" == "develop" ]; then
-            # 开发分支：如果当前版本为空，从1.0.0开始；否则使用当前版本
-            if [ -z "$CURRENT_BOM" ] || [ "$CURRENT_BOM" == "" ]; then
-              BASE_BOM="1.0.0"
-            else
-              BASE_BOM="$CURRENT_BOM"
-            fi
-          else
-            # 其他分支：使用当前版本或默认值
-            BASE_BOM=${CURRENT_BOM:-"$DEFAULT_VERSION"}
           fi
           
-          # Determine BOM version
+          # 确定 BOM 版本（优先使用手动输入的版本，不受分支规则限制）
           if [ -n "${{ github.event.inputs.bom_version }}" ]; then
+            # 用户手动输入了版本，直接使用（最高优先级）
             FINAL_BOM="${{ github.event.inputs.bom_version }}"
-            echo "✅ Using manually specified BOM version: $FINAL_BOM"
-          elif [ "${{ github.event.inputs.auto_increment }}" == "true" ]; then
-            FINAL_BOM=$(echo "$BASE_BOM" | awk -F. '{printf "%d.%d.%d", $1, $2, $3+1}')
-            echo "✅ Auto increment BOM version: $BASE_BOM -> $FINAL_BOM (branch: $BRANCH_NAME)"
+            echo "✅ Using manually specified BOM version: $FINAL_BOM (ignoring branch rules)"
           else
-            FINAL_BOM="$BASE_BOM"
-            echo "✅ Using current BOM version: $FINAL_BOM"
+            # 没有手动输入，根据分支规则确定基础版本
+            if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
+              # main分支：从0.0.1开始
+              if [ -z "$CURRENT_BOM" ] || [ "$CURRENT_BOM" == "" ]; then
+                BASE_BOM="0.0.1"
+                echo "📌 main分支：使用起始版本 0.0.1"
+              else
+                # 检查版本是否符合 main 分支规则（应该是 0.x.x）
+                MAJOR_VERSION=$(echo "$CURRENT_BOM" | cut -d'.' -f1)
+                if [ "$MAJOR_VERSION" != "0" ]; then
+                  echo "⚠️  警告：version.properties 中的 BOM 版本 $CURRENT_BOM 不符合 main 分支规则（应为 0.x.x），重置为 0.0.1"
+                  BASE_BOM="0.0.1"
+                else
+                  BASE_BOM="$CURRENT_BOM"
+                  echo "📌 main分支：使用 version.properties 中的版本 $BASE_BOM"
+                fi
+              fi
+            elif [[ "$BRANCH_NAME" == v* ]] || [ "$BRANCH_NAME" == "develop" ]; then
+              # 开发分支：必须从分支名称提取版本号
+              if [ -z "$BRANCH_VERSION" ]; then
+                echo "❌ 错误：无法从分支名称 '$BRANCH_NAME' 提取有效版本号"
+                echo "   开发分支名称格式应为：v2.0.0 或 v2.0.0/develop（其中 2.0.0 为版本号）"
+                echo "   当前分支名称不符合格式要求，集成发布失败"
+                exit 1
+              fi
+              
+              # 有分支版本号，使用分支版本号
+              if [ -z "$CURRENT_BOM" ] || [ "$CURRENT_BOM" == "" ]; then
+                BASE_BOM="$BRANCH_VERSION"
+                echo "📌 开发分支（$BRANCH_NAME）：使用分支起始版本 $BASE_BOM"
+              else
+                # 检查版本是否符合开发分支规则（应该与分支版本号的主版本号一致）
+                CURRENT_MAJOR=$(echo "$CURRENT_BOM" | cut -d'.' -f1)
+                BRANCH_MAJOR=$(echo "$BRANCH_VERSION" | cut -d'.' -f1)
+                if [ "$CURRENT_MAJOR" != "$BRANCH_MAJOR" ]; then
+                  echo "⚠️  警告：version.properties 中的 BOM 版本 $CURRENT_BOM 不符合开发分支规则（应为 $BRANCH_MAJOR.x.x），重置为 $BRANCH_VERSION"
+                  BASE_BOM="$BRANCH_VERSION"
+                else
+                  BASE_BOM="$CURRENT_BOM"
+                  echo "📌 开发分支（$BRANCH_NAME）：使用 version.properties 中的版本 $BASE_BOM"
+                fi
+              fi
+            else
+              # 其他分支：使用当前版本或默认值
+              BASE_BOM=${CURRENT_BOM:-"$DEFAULT_VERSION"}
+              echo "📌 其他分支：使用版本 $BASE_BOM"
+            fi
+            
+            # 根据是否自动递增确定最终版本
+            if [ "${{ github.event.inputs.auto_increment }}" == "true" ]; then
+              FINAL_BOM=$(echo "$BASE_BOM" | awk -F. '{printf "%d.%d.%d", $1, $2, $3+1}')
+              echo "✅ Auto increment BOM version: $BASE_BOM -> $FINAL_BOM (branch: $BRANCH_NAME)"
+            else
+              FINAL_BOM="$BASE_BOM"
+              echo "✅ Using current BOM version: $FINAL_BOM"
+            fi
           fi
           
-          # Determine module versions (use input or fallback to BOM version)
+          # Determine module versions (priority: manual input > version.properties > BOM version)
+          CURRENT_CORE="${{ steps.version_info.outputs.current_core }}"
+          CURRENT_TRANSFORM="${{ steps.version_info.outputs.current_transform }}"
+          CURRENT_VIEW="${{ steps.version_info.outputs.current_view }}"
+          CURRENT_COMPOSE="${{ steps.version_info.outputs.current_compose }}"
+          
           FINAL_CORE="${{ github.event.inputs.core_version }}"
           if [ -z "$FINAL_CORE" ]; then
-            FINAL_CORE="$FINAL_BOM"
+            # 如果用户没有输入，优先使用 version.properties 中的版本
+            if [ -n "$CURRENT_CORE" ] && [ "$CURRENT_CORE" != "" ]; then
+              FINAL_CORE="$CURRENT_CORE"
+              echo "✅ Using current lumen-core version from version.properties: $FINAL_CORE"
+            else
+              FINAL_CORE="$FINAL_BOM"
+              echo "✅ Using BOM version for lumen-core (version.properties not found): $FINAL_CORE"
+            fi
+          else
+            echo "✅ Using manually specified lumen-core version: $FINAL_CORE"
           fi
           
           FINAL_TRANSFORM="${{ github.event.inputs.transform_version }}"
           if [ -z "$FINAL_TRANSFORM" ]; then
-            FINAL_TRANSFORM="$FINAL_BOM"
+            if [ -n "$CURRENT_TRANSFORM" ] && [ "$CURRENT_TRANSFORM" != "" ]; then
+              FINAL_TRANSFORM="$CURRENT_TRANSFORM"
+              echo "✅ Using current lumen-transform version from version.properties: $FINAL_TRANSFORM"
+            else
+              FINAL_TRANSFORM="$FINAL_BOM"
+              echo "✅ Using BOM version for lumen-transform (version.properties not found): $FINAL_TRANSFORM"
+            fi
+          else
+            echo "✅ Using manually specified lumen-transform version: $FINAL_TRANSFORM"
           fi
           
           FINAL_VIEW="${{ github.event.inputs.view_version }}"
           if [ -z "$FINAL_VIEW" ]; then
-            FINAL_VIEW="$FINAL_BOM"
+            if [ -n "$CURRENT_VIEW" ] && [ "$CURRENT_VIEW" != "" ]; then
+              FINAL_VIEW="$CURRENT_VIEW"
+              echo "✅ Using current lumen-view version from version.properties: $FINAL_VIEW"
+            else
+              FINAL_VIEW="$FINAL_BOM"
+              echo "✅ Using BOM version for lumen-view (version.properties not found): $FINAL_VIEW"
+            fi
+          else
+            echo "✅ Using manually specified lumen-view version: $FINAL_VIEW"
           fi
           
           FINAL_COMPOSE="${{ github.event.inputs.compose_version }}"
           if [ -z "$FINAL_COMPOSE" ]; then
-            FINAL_COMPOSE="$FINAL_BOM"
+            if [ -n "$CURRENT_COMPOSE" ] && [ "$CURRENT_COMPOSE" != "" ]; then
+              FINAL_COMPOSE="$CURRENT_COMPOSE"
+              echo "✅ Using current lumen-compose version from version.properties: $FINAL_COMPOSE"
+            else
+              FINAL_COMPOSE="$FINAL_BOM"
+              echo "✅ Using BOM version for lumen-compose (version.properties not found): $FINAL_COMPOSE"
+            fi
+          else
+            echo "✅ Using manually specified lumen-compose version: $FINAL_COMPOSE"
           fi
           
           echo "bom_version=$FINAL_BOM" >> $GITHUB_OUTPUT
@@ -221,7 +322,7 @@ jobs:
           echo "  compose: $COMPOSE_VERSION"
           
           ./gradlew clean build test \
-            -PVERSION_NAME=$BOM_VERSION \
+            -PLUMEN_BOM_VERSION=$BOM_VERSION \
             -PLUMEN_CORE_VERSION=$CORE_VERSION \
             -PLUMEN_TRANSFORM_VERSION=$TRANSFORM_VERSION \
             -PLUMEN_VIEW_VERSION=$VIEW_VERSION \
@@ -270,7 +371,7 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Publish all modules to Maven Central
+      - name: Publish BOM to Maven Central (only BOM, not sub-modules)
         id: publish
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.ORG_GRADLE_PROJECT_MAVENCENTRALUSERNAME }}
@@ -285,24 +386,23 @@ jobs:
           VIEW_VERSION="${{ needs.pre-check.outputs.view_version }}"
           COMPOSE_VERSION="${{ needs.pre-check.outputs.compose_version }}"
           
-          echo "📦 Publishing all modules to Maven Central"
+          echo "📦 Publishing BOM to Maven Central (sub-modules already published separately)"
           echo "  BOM: $BOM_VERSION"
-          echo "  core: $CORE_VERSION"
-          echo "  transform: $TRANSFORM_VERSION"
-          echo "  view: $VIEW_VERSION"
-          echo "  compose: $COMPOSE_VERSION"
+          echo "  Note: Sub-modules (core=$CORE_VERSION, transform=$TRANSFORM_VERSION, view=$VIEW_VERSION, compose=$COMPOSE_VERSION) are NOT published here"
+          echo "  They should be published separately using individual module workflows"
           
           # 重试机制：应对网络/发布服务器波动
           MAX_RETRIES=3
           RETRY_COUNT=0
           PUBLISH_SUCCESS="false"
           
-          # 循环重试发布
+          # 循环重试发布（只发布 BOM，不发布子模块）
           until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
             # 执行发布任务，捕获输出和退出码
+            # 只发布 lumen 模块（BOM），不发布子模块
             set +e
-            PUBLISH_OUTPUT=$(./gradlew publishAllToMavenCentral \
-                -PVERSION_NAME="$BOM_VERSION" \
+            PUBLISH_OUTPUT=$(./gradlew :lumen:publishToMavenCentral \
+                -PLUMEN_BOM_VERSION="$BOM_VERSION" \
                 -PLUMEN_CORE_VERSION="$CORE_VERSION" \
                 -PLUMEN_TRANSFORM_VERSION="$TRANSFORM_VERSION" \
                 -PLUMEN_VIEW_VERSION="$VIEW_VERSION" \
@@ -313,11 +413,25 @@ jobs:
             EXIT_CODE=$?
             set -e
             
-            # 核心判断：忽略清理阶段的已知错误，只检查发布核心任务
-            if echo "$PUBLISH_OUTPUT" | grep -q "publishMavenPublicationToMavenCentralRepository" && \
-               ! echo "$PUBLISH_OUTPUT" | grep -qi "failed to deploy\|authentication failed\|signing failed"; then
+            # 保存完整输出用于调试
+            echo "=== 发布输出（尝试 $((RETRY_COUNT + 1))/$MAX_RETRIES）==="
+            echo "$PUBLISH_OUTPUT"
+            echo "=== 发布输出结束 ==="
+            
+            # 检查是否有明确的成功标志
+            if echo "$PUBLISH_OUTPUT" | grep -qi "publishMavenPublicationToMavenCentralRepository.*SUCCESS\|Published\|Deployed\|BUILD SUCCESSFUL"; then
               PUBLISH_SUCCESS="true"
+              echo "✅ 发布成功（检测到成功标志）"
               break
+            fi
+            
+            # 检查是否有明确的失败标志
+            if echo "$PUBLISH_OUTPUT" | grep -qi "BUILD FAILED\|FAILURE\|failed to deploy\|authentication failed\|signing failed"; then
+              echo "❌ 发布失败（检测到失败标志）"
+              # 提取关键错误信息
+              echo "=== 关键错误信息 ==="
+              echo "$PUBLISH_OUTPUT" | grep -iE "error|failed|exception|BUILD FAILED" | head -30
+              echo "=== 错误信息结束 ==="
             fi
             
             # 重试前等待
@@ -330,18 +444,24 @@ jobs:
           
           # 结果处理
           if [ "$PUBLISH_SUCCESS" = "true" ]; then
-            echo "✅ 所有模块成功发布到 Maven Central"
+            echo "✅ BOM 版本 $BOM_VERSION 成功发布到 Maven Central"
             echo "publish_success=true" >> $GITHUB_OUTPUT
             # 兼容插件清理阶段的已知错误
             if [ $EXIT_CODE -ne 0 ]; then
               echo "⚠️  构建退出码非零，但核心发布任务已完成（插件清理阶段的已知问题）"
               echo "关键日志片段："
-              echo "$PUBLISH_OUTPUT" | grep -E "Published|Signed|Deployed" | tail -20
+              echo "$PUBLISH_OUTPUT" | grep -E "Published|Signed|Deployed|SUCCESS" | tail -20
             fi
           else
-            echo "❌ 发布失败（已重试 $MAX_RETRIES 次）"
-            echo "发布日志（最后 50 行）："
-            echo "$PUBLISH_OUTPUT" | tail -50
+            echo "❌ BOM 发布失败（已重试 $MAX_RETRIES 次）"
+            echo ""
+            echo "=== 完整发布日志 ==="
+            echo "$PUBLISH_OUTPUT"
+            echo "=== 日志结束 ==="
+            echo ""
+            echo "=== 错误摘要 ==="
+            echo "$PUBLISH_OUTPUT" | grep -iE "error|failed|exception|BUILD FAILED" | head -50
+            echo "=== 错误摘要结束 ==="
             echo "publish_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi

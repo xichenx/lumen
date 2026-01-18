@@ -11,7 +11,7 @@ on:
         type: boolean
         default: true
       publish_to:
-        description: 'Where to publish (JitPack uses unified lumen module, not individual modules)'
+        description: 'Where to publish'
         type: choice
         required: true
         default: 'maven-central'
@@ -47,7 +47,8 @@ jobs:
         id: version_info
         run: |
           BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          CURRENT_VERSION=$(grep "^LUMEN_COMPOSE_VERSION=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "")
+          # 从 version.properties 读取当前版本
+          CURRENT_VERSION=$(grep "^lumen.compose.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
           
           # 根据分支确定默认版本
           if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
@@ -58,8 +59,9 @@ jobs:
             DEFAULT_VERSION="1.0.0"
           fi
           
+          # 如果 version.properties 中没有版本，使用默认值
           if [ -z "$CURRENT_VERSION" ]; then
-            CURRENT_VERSION=$(grep "^VERSION_NAME=" gradle.properties 2>/dev/null | cut -d'=' -f2 || echo "$DEFAULT_VERSION")
+            CURRENT_VERSION="$DEFAULT_VERSION"
           fi
           
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
@@ -75,20 +77,65 @@ jobs:
           BRANCH_NAME="${{ steps.version_info.outputs.branch_name }}"
           DEFAULT_VERSION="${{ steps.version_info.outputs.default_version }}"
           
+          # 从分支名称提取版本号（支持 v2.0.0 或 v2.0.0/develop 格式）
+          BRANCH_VERSION=""
+          if [[ "$BRANCH_NAME" == v* ]]; then
+            # 提取版本号：v2.0.0 -> 2.0.0, v2.0.0/develop -> 2.0.0
+            BRANCH_VERSION=$(echo "$BRANCH_NAME" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+            if [[ "$BRANCH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "📌 从分支名称提取版本号: $BRANCH_NAME -> $BRANCH_VERSION"
+            else
+              BRANCH_VERSION=""
+              echo "⚠️  无法从分支名称提取有效版本号: $BRANCH_NAME"
+            fi
+          fi
+          
+          # 确定基础版本（遵循分支规则）
           if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
+            # main分支：从0.0.1开始
             if [ -z "$CURRENT" ] || [ "$CURRENT" == "" ]; then
               BASE_VERSION="0.0.1"
+              echo "📌 main分支：使用起始版本 0.0.1"
             else
-              BASE_VERSION="$CURRENT"
+              # 检查版本是否符合 main 分支规则（应该是 0.x.x）
+              MAJOR_VERSION=$(echo "$CURRENT" | cut -d'.' -f1)
+              if [ "$MAJOR_VERSION" != "0" ]; then
+                echo "⚠️  警告：version.properties 中的版本 $CURRENT 不符合 main 分支规则（应为 0.x.x），重置为 0.0.1"
+                BASE_VERSION="0.0.1"
+              else
+                BASE_VERSION="$CURRENT"
+                echo "📌 main分支：使用 version.properties 中的版本 $BASE_VERSION"
+              fi
             fi
           elif [[ "$BRANCH_NAME" == v* ]] || [ "$BRANCH_NAME" == "develop" ]; then
+            # 开发分支：必须从分支名称提取版本号
+            if [ -z "$BRANCH_VERSION" ]; then
+              echo "❌ 错误：无法从分支名称 '$BRANCH_NAME' 提取有效版本号"
+              echo "   开发分支名称格式应为：v2.0.0 或 v2.0.0/develop（其中 2.0.0 为版本号）"
+              echo "   当前分支名称不符合格式要求，发布失败"
+              exit 1
+            fi
+            
+            # 有分支版本号，使用分支版本号
             if [ -z "$CURRENT" ] || [ "$CURRENT" == "" ]; then
-              BASE_VERSION="1.0.0"
+              BASE_VERSION="$BRANCH_VERSION"
+              echo "📌 开发分支（$BRANCH_NAME）：使用分支起始版本 $BASE_VERSION"
             else
-              BASE_VERSION="$CURRENT"
+              # 检查版本是否符合开发分支规则（应该与分支版本号的主版本号一致）
+              CURRENT_MAJOR=$(echo "$CURRENT" | cut -d'.' -f1)
+              BRANCH_MAJOR=$(echo "$BRANCH_VERSION" | cut -d'.' -f1)
+              if [ "$CURRENT_MAJOR" != "$BRANCH_MAJOR" ]; then
+                echo "⚠️  警告：version.properties 中的版本 $CURRENT 不符合开发分支规则（应为 $BRANCH_MAJOR.x.x），重置为 $BRANCH_VERSION"
+                BASE_VERSION="$BRANCH_VERSION"
+              else
+                BASE_VERSION="$CURRENT"
+                echo "📌 开发分支（$BRANCH_NAME）：使用 version.properties 中的版本 $BASE_VERSION"
+              fi
             fi
           else
+            # 其他分支：使用当前版本或默认值
             BASE_VERSION=${CURRENT:-"$DEFAULT_VERSION"}
+            echo "📌 其他分支：使用版本 $BASE_VERSION"
           fi
           
           if [ -n "${{ github.event.inputs.version }}" ]; then
@@ -271,8 +318,5 @@ jobs:
           echo "\`\`\`kotlin" >> $GITHUB_STEP_SUMMARY
           echo "// Maven Central" >> $GITHUB_STEP_SUMMARY
           echo "implementation(\"io.github.xichenx:lumen-compose:$VERSION\")" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "// JitPack: Use unified lumen module instead" >> $GITHUB_STEP_SUMMARY
-          echo "// implementation(\"com.github.xichenx:lumen:$VERSION\")" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 

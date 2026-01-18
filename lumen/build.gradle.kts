@@ -6,12 +6,10 @@ plugins {
 
 // BOM 版本管理：用于版本协调
 val bomVersion: String = run {
-    val libraryVersion = project.findProperty("LIBRARY_VERSION_NAME") as String?
-    val fallbackVersion = project.findProperty("VERSION_NAME") as String?
+    val bomVersionProperty = project.findProperty("LUMEN_BOM_VERSION") as String?
     
     when {
-        !libraryVersion.isNullOrBlank() -> libraryVersion.trim()
-        !fallbackVersion.isNullOrBlank() -> fallbackVersion.trim()
+        !bomVersionProperty.isNullOrBlank() -> bomVersionProperty.trim()
         else -> "1.0.0"
     }
 }
