@@ -86,11 +86,11 @@ android {
 }
 
 dependencies {
-    // Core module
-    implementation(project(":lumen-core"))
+    // Core module - 使用 api 以便依赖传递，但版本由 BOM 管理
+    api(project(":lumen-core"))
     
-    // Transform module (for transformers)
-    implementation(project(":lumen-transform"))
+    // Transform module (for transformers) - 使用 api 以便依赖传递，但版本由 BOM 管理
+    api(project(":lumen-transform"))
     
     // AndroidX
     implementation(libs.androidx.core.ktx)

@@ -93,11 +93,11 @@ android {
 }
 
 dependencies {
-    // Core module
-    implementation(project(":lumen-core"))
+    // Core module - 使用 api 以便依赖传递，但版本由 BOM 管理
+    api(project(":lumen-core"))
     
-    // View module (for RequestBuilder)
-    implementation(project(":lumen-view"))
+    // View module (for RequestBuilder) - 使用 api 以便依赖传递，但版本由 BOM 管理
+    api(project(":lumen-view"))
     
     // AndroidX
     implementation(libs.androidx.core.ktx)
