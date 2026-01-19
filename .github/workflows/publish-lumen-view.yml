@@ -271,8 +271,7 @@ jobs:
       needs.build.outputs.build_success == 'true' &&
       (github.event.inputs.publish_to == 'maven-central' || github.event.inputs.publish_to == 'both')
     permissions:
-      contents: write
-      id-token: write
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -365,14 +364,6 @@ jobs:
             echo "publish_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
-
-      - name: Update version in version.properties
-        if: steps.publish.outputs.publish_success == 'true'
-        uses: ./.github/actions/update-version
-        with:
-          module_name: 'view'
-          version: ${{ needs.pre-check.outputs.version }}
-          git_token: ${{ secrets.GITHUB_TOKEN }}
 
   summary:
     runs-on: ubuntu-latest

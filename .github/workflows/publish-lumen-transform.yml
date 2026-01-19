@@ -263,8 +263,7 @@ jobs:
       needs.build.outputs.build_success == 'true' &&
       (github.event.inputs.publish_to == 'maven-central' || github.event.inputs.publish_to == 'both')
     permissions:
-      contents: write
-      id-token: write
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -355,14 +354,62 @@ jobs:
             echo "publish_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
-
-      - name: Update version in version.properties
+      
+      - name: Create Git tag and update version
         if: steps.publish.outputs.publish_success == 'true'
-        uses: ./.github/actions/update-version
-        with:
-          module_name: 'transform'
-          version: ${{ needs.pre-check.outputs.version }}
-          git_token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.pre-check.outputs.version }}"
+          MODULE="lumen-transform"
+          TAG_NAME="${MODULE}-v${VERSION}"
+          
+          echo "🏷️  Creating Git tag and updating version.properties..."
+          
+          # 配置 git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # 检查 tag 是否已存在（防止重复）
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️  Tag $TAG_NAME already exists, skipping tag creation"
+          else
+            # 创建 Git tag 标记已发布
+            git tag "$TAG_NAME" -m "Release ${MODULE} ${VERSION}"
+            git push origin "$TAG_NAME" || {
+              echo "❌ Failed to push tag, but continuing with version update"
+            }
+            echo "✅ Created and pushed Git tag: $TAG_NAME"
+          fi
+          
+          # 更新 version.properties
+          if grep -q "^lumen.transform.version=" version.properties; then
+            sed -i "s/^lumen.transform.version=.*/lumen.transform.version=$VERSION/" version.properties
+            echo "✅ Updated lumen.transform.version=$VERSION in version.properties"
+          else
+            echo "lumen.transform.version=$VERSION" >> version.properties
+            echo "✅ Added lumen.transform.version=$VERSION to version.properties"
+          fi
+          
+          # 提交更改
+          git add version.properties
+          if git diff --staged --quiet; then
+            echo "ℹ️  No changes to commit (version already matches)"
+          else
+            git commit -m "chore: update lumen.transform.version to $VERSION after release [skip ci]"
+            git push || {
+              echo "❌ Failed to push version.properties update"
+              echo "⚠️  Tag was created, but version.properties update failed"
+              echo "   You may need to manually update version.properties"
+              exit 1
+            }
+            echo "✅ Committed and pushed version update to version.properties"
+          fi
+          
+          echo ""
+          echo "📋 Release Summary:"
+          echo "   - Version: $VERSION"
+          echo "   - Git Tag: $TAG_NAME"
+          echo "   - Maven Central: io.github.xichenx:${MODULE}:${VERSION}"
+          echo "   - Note: Maven Central may take a few minutes to sync"
 
   summary:
     runs-on: ubuntu-latest

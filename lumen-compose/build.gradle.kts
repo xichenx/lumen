@@ -58,6 +58,17 @@ mavenPublishing {
             connection.set("scm:git:git://github.com/xichenx/lumen.git")
             developerConnection.set("scm:git:ssh://git@github.com:xichenx/lumen.git")
         }
+        // 手动添加 BOM 的 dependencyManagement，确保发布的 POM 包含 BOM 引用
+        withXml {
+            val dependencyManagement = asNode().appendNode("dependencyManagement")
+            val dependencies = dependencyManagement.appendNode("dependencies")
+            val bomDependency = dependencies.appendNode("dependency")
+            bomDependency.appendNode("groupId", "io.github.xichenx")
+            bomDependency.appendNode("artifactId", "lumen-bom")
+            bomDependency.appendNode("version", bomVersion)
+            bomDependency.appendNode("type", "pom")
+            bomDependency.appendNode("scope", "import")
+        }
     }
 }
 
@@ -99,15 +110,15 @@ android {
 }
 
 dependencies {
-    // BOM 平台依赖：确保发布的 POM 包含 dependencyManagement 引用 BOM
-    api(platform("io.github.xichenx:lumen-bom:$bomVersion"))
+    // BOM 平台依赖：构建时使用项目 BOM（因为 BOM 还未发布），发布时 POM 中会包含 BOM 的 dependencyManagement
+    api(platform(project(":lumen")))
     
     // Core module - 使用 api 以便依赖传递，版本由 BOM 管理
-    // 本地构建时使用项目依赖，发布时 Gradle 会自动转换为外部依赖（版本由 BOM 管理）
+    // 构建时使用项目依赖，发布时 Gradle 会自动转换为外部依赖（版本由 BOM 管理）
     api(project(":lumen-core"))
     
     // View module (for RequestBuilder) - 使用 api 以便依赖传递，版本由 BOM 管理
-    // 本地构建时使用项目依赖，发布时 Gradle 会自动转换为外部依赖（版本由 BOM 管理）
+    // 构建时使用项目依赖，发布时 Gradle 会自动转换为外部依赖（版本由 BOM 管理）
     api(project(":lumen-view"))
     
     // AndroidX
