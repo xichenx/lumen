@@ -1,0 +1,78 @@
+name: 'Update Version in version.properties'
+description: 'Update module version in version.properties file and commit back to repository'
+
+inputs:
+  module_name:
+    description: 'Module name (e.g., core, transform, view, compose, bom)'
+    required: true
+  version:
+    description: 'Version to write'
+    required: true
+  git_token:
+    description: 'GitHub token for committing'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ inputs.git_token }}
+        fetch-depth: 0
+        persist-credentials: true
+
+    - name: Update version.properties
+      shell: bash
+      run: |
+        MODULE="${{ inputs.module_name }}"
+        VERSION="${{ inputs.version }}"
+        PROPERTY_NAME="lumen.${MODULE}.version"
+        
+        echo "📝 Updating $PROPERTY_NAME to $VERSION in version.properties"
+        
+        # 检查文件是否存在
+        if [ ! -f "version.properties" ]; then
+          echo "❌ version.properties file not found"
+          exit 1
+        fi
+        
+        # 更新版本（如果属性存在则更新，不存在则追加）
+        if grep -q "^${PROPERTY_NAME}=" version.properties; then
+          # 属性存在，更新它
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS
+            sed -i '' "s/^${PROPERTY_NAME}=.*/${PROPERTY_NAME}=${VERSION}/" version.properties
+          else
+            # Linux
+            sed -i "s/^${PROPERTY_NAME}=.*/${PROPERTY_NAME}=${VERSION}/" version.properties
+          fi
+          echo "✅ Updated existing property: $PROPERTY_NAME=$VERSION"
+        else
+          # 属性不存在，追加到文件末尾
+          echo "${PROPERTY_NAME}=${VERSION}" >> version.properties
+          echo "✅ Added new property: $PROPERTY_NAME=$VERSION"
+        fi
+        
+        # 显示更新后的内容
+        echo "📋 Updated version.properties:"
+        grep "^lumen\." version.properties || echo "⚠️  No lumen.* properties found"
+
+    - name: Commit and push version update
+      shell: bash
+      run: |
+        MODULE="${{ inputs.module_name }}"
+        VERSION="${{ inputs.version }}"
+        
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # 检查是否有更改
+        if git diff --quiet version.properties; then
+          echo "ℹ️  No changes to commit (version already set to $VERSION)"
+        else
+          git add version.properties
+          git commit -m "chore: update ${MODULE} version to ${VERSION} [skip ci]"
+          git push
+          echo "✅ Committed and pushed version update: ${MODULE}=${VERSION}"
+        fi

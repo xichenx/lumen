@@ -14,8 +14,18 @@ val publishVersion: String = run {
     }
 }
 
+// BOM 版本（用于引用 BOM 进行版本管理）
+val bomVersion: String = run {
+    val bomVersionProperty = project.findProperty("LUMEN_BOM_VERSION") as String?
+    when {
+        !bomVersionProperty.isNullOrBlank() -> bomVersionProperty.trim()
+        else -> publishVersion // 如果没有 BOM 版本，使用当前模块版本
+    }
+}
+
 version = publishVersion
 logger.info("📦 Publishing lumen-transform version: $publishVersion")
+logger.info("📦 Using BOM version: $bomVersion")
 
 // Maven 发布配置
 mavenPublishing {
@@ -82,7 +92,11 @@ android {
 }
 
 dependencies {
-    // Core module - 使用 api 以便依赖传递，但版本由 BOM 管理
+    // BOM 平台依赖：确保发布的 POM 包含 dependencyManagement 引用 BOM
+    api(platform("io.github.xichenx:lumen-bom:$bomVersion"))
+    
+    // Core module - 使用 api 以便依赖传递，版本由 BOM 管理
+    // 本地构建时使用项目依赖，发布时 Gradle 会自动转换为外部依赖（版本由 BOM 管理）
     api(project(":lumen-core"))
     
     // AndroidX

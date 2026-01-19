@@ -167,8 +167,39 @@ jobs:
         id: check_version
         run: |
           VERSION="${{ steps.final_version.outputs.final_version }}"
+          MODULE="lumen-transform"
+          TAG_NAME="${MODULE}-v${VERSION}"
+          
+          echo "🔍 Checking if version $VERSION has already been published..."
+          
+          # 检查 Git tag 是否存在
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️  Git tag '$TAG_NAME' already exists"
+            echo "   This version may have already been published"
+            echo "   If you need to republish, delete the tag first: git tag -d $TAG_NAME && git push origin :refs/tags/$TAG_NAME"
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+            echo "skip_reason=tag_exists" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 检查 Maven Central（快速检查，不阻塞）
+          MAVEN_URL="https://repo1.maven.org/maven2/io/github/xichenx/${MODULE}/${VERSION}/${MODULE}-${VERSION}.pom"
+          if curl -s -f -o /dev/null "$MAVEN_URL" 2>/dev/null; then
+            echo "⚠️  Version $VERSION already exists on Maven Central"
+            echo "   URL: $MAVEN_URL"
+            echo "   Creating tag to mark as published, but skipping actual publish"
+            # 即使 Maven Central 有，也创建 tag 标记，避免重复检查
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git tag "$TAG_NAME" -m "Release ${MODULE} ${VERSION} (already published)"
+            git push origin "$TAG_NAME" || echo "⚠️  Failed to push tag, but continuing"
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+            echo "skip_reason=maven_exists" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "✅ Version $VERSION is ready to publish (no existing tag or Maven Central entry)"
           echo "should_publish=true" >> $GITHUB_OUTPUT
-          echo "✅ Version $VERSION is ready to publish"
 
   build:
     runs-on: ubuntu-latest
@@ -232,7 +263,8 @@ jobs:
       needs.build.outputs.build_success == 'true' &&
       (github.event.inputs.publish_to == 'maven-central' || github.event.inputs.publish_to == 'both')
     permissions:
-      contents: read
+      contents: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -323,6 +355,14 @@ jobs:
             echo "publish_success=false" >> $GITHUB_OUTPUT
             exit 1
           fi
+
+      - name: Update version in version.properties
+        if: steps.publish.outputs.publish_success == 'true'
+        uses: ./.github/actions/update-version
+        with:
+          module_name: 'transform'
+          version: ${{ needs.pre-check.outputs.version }}
+          git_token: ${{ secrets.GITHUB_TOKEN }}
 
   summary:
     runs-on: ubuntu-latest
