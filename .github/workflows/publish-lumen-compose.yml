@@ -29,6 +29,9 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.final_version.outputs.final_version }}
+      core_version: ${{ steps.version_info.outputs.core_version }}
+      view_version: ${{ steps.version_info.outputs.view_version }}
+      bom_version: ${{ steps.version_info.outputs.bom_version }}
       should_publish: ${{ steps.check_version.outputs.should_publish }}
     steps:
       - name: Checkout code
@@ -49,6 +52,10 @@ jobs:
           BRANCH_NAME=${GITHUB_REF#refs/heads/}
           # 从 version.properties 读取当前版本
           CURRENT_VERSION=$(grep "^lumen.compose.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
+          # 读取依赖模块版本（用于设置依赖模块的 version 属性，确保 POM 中使用正确版本）
+          CORE_VERSION=$(grep "^lumen.core.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
+          VIEW_VERSION=$(grep "^lumen.view.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
+          BOM_VERSION=$(grep "^lumen.bom.version=" version.properties 2>/dev/null | cut -d'=' -f2 | xargs || echo "")
           
           # 根据分支确定默认版本
           if [ "$BRANCH_NAME" == "main" ] || [ "$BRANCH_NAME" == "master" ]; then
@@ -63,11 +70,22 @@ jobs:
           if [ -z "$CURRENT_VERSION" ]; then
             CURRENT_VERSION="$DEFAULT_VERSION"
           fi
+          # 如果没有依赖版本，使用 BOM 版本或默认值
+          if [ -z "$CORE_VERSION" ]; then
+            CORE_VERSION="${BOM_VERSION:-$DEFAULT_VERSION}"
+          fi
+          if [ -z "$VIEW_VERSION" ]; then
+            VIEW_VERSION="${BOM_VERSION:-$DEFAULT_VERSION}"
+          fi
           
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "core_version=$CORE_VERSION" >> $GITHUB_OUTPUT
+          echo "view_version=$VIEW_VERSION" >> $GITHUB_OUTPUT
+          echo "bom_version=$BOM_VERSION" >> $GITHUB_OUTPUT
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           echo "default_version=$DEFAULT_VERSION" >> $GITHUB_OUTPUT
           echo "Current lumen-compose version: $CURRENT_VERSION"
+          echo "Dependency versions: core=$CORE_VERSION, view=$VIEW_VERSION"
           echo "Current branch: $BRANCH_NAME"
       
       - name: Determine final version
@@ -192,9 +210,16 @@ jobs:
         id: build
         run: |
           VERSION="${{ needs.pre-check.outputs.version }}"
+          CORE_VERSION="${{ needs.pre-check.outputs.core_version }}"
+          VIEW_VERSION="${{ needs.pre-check.outputs.view_version }}"
+          BOM_VERSION="${{ needs.pre-check.outputs.bom_version }}"
           echo "🔨 Building lumen-compose version: $VERSION"
+          echo "   Setting dependency module versions: core=$CORE_VERSION, view=$VIEW_VERSION"
           ./gradlew :lumen-compose:clean :lumen-compose:build :lumen-compose:test \
             -PLUMEN_COMPOSE_VERSION=$VERSION \
+            -PLUMEN_CORE_VERSION=$CORE_VERSION \
+            -PLUMEN_VIEW_VERSION=$VIEW_VERSION \
+            -PLUMEN_BOM_VERSION=$BOM_VERSION \
             --stacktrace \
             --no-daemon \
             --console=plain
@@ -247,7 +272,12 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.ORG_GRADLE_PROJECT_SIGNINGINMEMORYKEYPASSWORD }}
         run: |
           VERSION="${{ needs.pre-check.outputs.version }}"
+          CORE_VERSION="${{ needs.pre-check.outputs.core_version }}"
+          VIEW_VERSION="${{ needs.pre-check.outputs.view_version }}"
+          BOM_VERSION="${{ needs.pre-check.outputs.bom_version }}"
           echo "📦 Publishing lumen-compose $VERSION to Maven Central"
+          echo "   Setting dependency module versions: core=$CORE_VERSION, view=$VIEW_VERSION"
+          echo "   (This ensures POM dependencies use correct versions from BOM)"
           
           # 重试机制：应对网络/发布服务器波动
           MAX_RETRIES=3
@@ -257,9 +287,14 @@ jobs:
           # 循环重试发布
           until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
             # 执行发布任务，捕获输出和退出码
+            # 传递依赖模块版本参数，确保依赖模块的 version 属性被正确设置
+            # 这样 Gradle 生成 POM 时会使用这些版本，而不是默认的 1.0.0
             set +e
             PUBLISH_OUTPUT=$(./gradlew :lumen-compose:publishToMavenCentral \
                 -PLUMEN_COMPOSE_VERSION="$VERSION" \
+                -PLUMEN_CORE_VERSION="$CORE_VERSION" \
+                -PLUMEN_VIEW_VERSION="$VIEW_VERSION" \
+                -PLUMEN_BOM_VERSION="$BOM_VERSION" \
                 --no-daemon \
                 --stacktrace \
                 --console=plain 2>&1)
