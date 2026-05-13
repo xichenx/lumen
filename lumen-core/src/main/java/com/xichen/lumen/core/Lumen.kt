@@ -8,7 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 
@@ -47,16 +47,16 @@ class Lumen private constructor(
      * @param request 图片加载请求
      * @return 图片状态 Flow
      */
-    fun load(request: ImageRequest): Flow<ImageState> = flow {
+    fun load(request: ImageRequest): Flow<ImageState> = channelFlow {
         // 1. 检查内存缓存（仅对静态图片）
         val cachedBitmap = memoryCache.get(request.cacheKey)
         if (cachedBitmap != null) {
-            emit(ImageState.Success(cachedBitmap))
-            return@flow
+            send(ImageState.Success(cachedBitmap))
+            return@channelFlow
         }
 
         // 2. 发送加载中状态
-        emit(ImageState.Loading)
+        send(ImageState.Loading)
 
         try {
             when (val data = request.data) {
@@ -75,7 +75,7 @@ class Lumen private constructor(
 
                     // 存入内存缓存
                     memoryCache.put(request.cacheKey, bitmap)
-                    emit(ImageState.Success(bitmap))
+                    send(ImageState.Success(bitmap))
                 }
 
                 is ImageData.VideoUri -> {
@@ -92,7 +92,7 @@ class Lumen private constructor(
 
                     // 存入内存缓存
                     memoryCache.put(request.cacheKey, bitmap)
-                    emit(ImageState.Success(bitmap))
+                    send(ImageState.Success(bitmap))
                 }
 
                 // 其他数据源：图片文件（可能包含 GIF）
@@ -101,25 +101,22 @@ class Lumen private constructor(
                     val dataSourceCacheKey = data.key
                     val rawData: ByteArray
                     val useProgressiveLoading = request.progressiveLoading && data is ImageData.Url
-                    
+
                     if (useProgressiveLoading && diskCache.get(dataSourceCacheKey) == null) {
                         // 渐进式加载：流式读取并逐步解码
                         val fetcher = FetcherFactory.create(context, data) as? NetworkFetcher
                             ?: throw IllegalStateException("Progressive loading only supports network URLs")
-                        
+
                         // 使用流式获取和渐进式解码
                         rawData = fetcher.fetchStream { partialData, progress ->
                             // 尝试渐进式解码部分数据
                             try {
                                 // 检测是否为渐进式 JPEG 或数据量足够大
                                 if (Decoder.isProgressiveJpeg(partialData) || partialData.size > 1024) {
-                                    // 在 IO 线程中解码预览图
                                     val previewBitmap = withContext(Dispatchers.Default) {
                                         try {
-                                            // 尝试解码当前数据
                                             val options = BitmapFactory.Options().apply {
                                                 inJustDecodeBounds = false
-                                                // 对于预览图，可以使用较大的采样率以节省内存
                                                 inSampleSize = if (partialData.size < 50000) 4 else 2
                                             }
                                             BitmapFactory.decodeByteArray(partialData, 0, partialData.size, options)
@@ -127,18 +124,16 @@ class Lumen private constructor(
                                             null
                                         }
                                     }
-                                    
-                                    // 如果成功解码预览图，发送渐进式状态
+
                                     previewBitmap?.let { bitmap ->
-                                        emit(ImageState.Progressive(bitmap, progress))
+                                        send(ImageState.Progressive(bitmap, progress))
                                     }
                                 }
                             } catch (e: Exception) {
-                                // 渐进式解码失败不影响最终加载
                                 android.util.Log.d("Lumen", "Progressive decode failed: ${e.message}")
                             }
                         }
-                        
+
                         // 存入磁盘缓存
                         diskCache.put(dataSourceCacheKey, rawData)
                     } else {
@@ -171,8 +166,7 @@ class Lumen private constructor(
                         val drawable = withContext(Dispatchers.Default) {
                             Decoder.decodeAnimated(context, decryptedData)
                         }
-                        // GIF 动画不存入内存缓存（Drawable 不支持）
-                        emit(ImageState.SuccessAnimated(drawable))
+                        send(ImageState.SuccessAnimated(drawable))
                     } else {
                         // 静态图片：使用 decode
                         var bitmap = withContext(Dispatchers.Default) {
@@ -188,13 +182,12 @@ class Lumen private constructor(
 
                         // 9. 存入内存缓存
                         memoryCache.put(request.cacheKey, bitmap)
-                        emit(ImageState.Success(bitmap))
+                        send(ImageState.Success(bitmap))
                     }
                 }
             }
         } catch (e: Exception) {
-            // 发送错误状态
-            emit(ImageState.Error(e))
+            send(ImageState.Error(e))
         }
     }.flowOn(Dispatchers.IO)
 
