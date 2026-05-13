@@ -91,10 +91,21 @@ class ImageViewTarget(
                             is ImageState.SuccessAnimated -> {
                                 android.util.Log.d("Lumen", "Successfully loaded animated image: ${request.data.key}")
                                 imageView.setImageDrawable(state.drawable)
-                                // 如果是 AnimatedImageDrawable，自动启动动画
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && 
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
                                     state.drawable is AnimatedImageDrawable) {
-                                    (state.drawable as AnimatedImageDrawable).start()
+                                    val animDrawable = state.drawable as AnimatedImageDrawable
+                                    if (imageView.isAttachedToWindow) {
+                                        animDrawable.start()
+                                    } else {
+                                        imageView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                                            override fun onViewAttachedToWindow(v: View) {
+                                                animDrawable.start()
+                                            }
+                                            override fun onViewDetachedFromWindow(v: View) {
+                                                animDrawable.stop()
+                                            }
+                                        })
+                                    }
                                 }
                             }
                             is ImageState.Error -> {
