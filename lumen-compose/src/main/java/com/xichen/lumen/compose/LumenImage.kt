@@ -3,6 +3,7 @@ package com.xichen.lumen.compose
 import android.graphics.Bitmap
 import android.graphics.drawable.AnimatedImageDrawable
 import android.os.Build
+import android.view.View
 import android.widget.ImageView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
@@ -114,19 +115,31 @@ fun LumenImage(
             )
         }
         is ImageState.SuccessAnimated -> {
-            // 使用 AndroidView 显示 Drawable（支持 GIF 动画）
+            val drawable = state.drawable
             AndroidView(
                 factory = { ctx ->
                     ImageView(ctx).apply {
-                        setImageDrawable(state.drawable)
-                        // 如果是 AnimatedImageDrawable，自动启动动画
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && 
-                            state.drawable is AnimatedImageDrawable) {
-                            (state.drawable as AnimatedImageDrawable).start()
+                        setImageDrawable(drawable)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                            drawable is AnimatedImageDrawable) {
+                            addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                                override fun onViewAttachedToWindow(v: View) {
+                                    drawable.start()
+                                }
+                                override fun onViewDetachedFromWindow(v: View) {
+                                    drawable.stop()
+                                }
+                            })
                         }
                     }
                 },
-                modifier = modifier
+                modifier = modifier,
+                onRelease = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                        drawable is AnimatedImageDrawable) {
+                        drawable.stop()
+                    }
+                }
             )
         }
         is ImageState.Error -> {
