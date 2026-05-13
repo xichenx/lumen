@@ -47,9 +47,14 @@ object Decoder {
     ): Drawable = withContext(Dispatchers.Default) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             // API 28+ 使用 ImageDecoder 支持 GIF 动画
-            val byteBuffer = ByteBuffer.wrap(data)
+            val byteBuffer = ByteBuffer.allocateDirect(data.size).apply {
+                put(data)
+                rewind()
+            }
             val source = ImageDecoder.createSource(byteBuffer)
-            ImageDecoder.decodeDrawable(source)
+            ImageDecoder.decodeDrawable(source) { decoder, _, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
         } else {
             // API < 28 降级为静态图片（第一帧）
             val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
